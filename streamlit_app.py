@@ -307,7 +307,7 @@ def generate_rm_suggestions(comparison, monthly_gap, pickup_forecast):
     if monthly_gap is not None and len(monthly_gap) > 0:
         weak_months = monthly_gap[monthly_gap['gap_pct'] < -20]
         if len(weak_months) > 0:
-            mesi_critici = ', '.join(weak_months['mese'].tolist())
+            mesi_critici = ', '.join(weak_months['Mese_Nome'].tolist())
             suggestions.append({
                 'type': 'critical',
                 'icon': '📅',
