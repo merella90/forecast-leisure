@@ -48,45 +48,62 @@ st.markdown("""
 def load_historical_data(file_2023, file_2024, file_2025):
     """Carica e processa i dati storici dalle tre stagioni"""
     
-    # Carica i tre file
-    df_2023 = pd.read_excel(file_2023)
-    df_2024 = pd.read_excel(file_2024)
-    df_2025 = pd.read_excel(file_2025)
-    
-    # Aggiungi anno a ciascun dataframe
-    df_2023['Anno'] = 2023
-    df_2024['Anno'] = 2024
-    df_2025['Anno'] = 2025
-    
-    # Combina i dataframe
-    df_all = pd.concat([df_2023, df_2024, df_2025], ignore_index=True)
-    
-    # Parsing della data
-    df_all['Data'] = pd.to_datetime(df_all['Giorno'], format='%a %d/%m/%Y', errors='coerce')
-    
-    # Rimuovi righe senza data valida
-    df_all = df_all.dropna(subset=['Data'])
-    
-    # Estrai informazioni temporali
-    df_all['Mese'] = df_all['Data'].dt.month
-    df_all['Giorno_Settimana'] = df_all['Data'].dt.dayofweek
-    df_all['Settimana_Anno'] = df_all['Data'].dt.isocalendar().week
-    df_all['Giorno_Nome'] = df_all['Data'].dt.day_name()
-    df_all['Mese_Nome'] = df_all['Data'].dt.month_name()
-    
-    # Calcola il giorno relativo dall'inizio della stagione
-    for anno in [2023, 2024, 2025]:
-        df_anno = df_all[df_all['Anno'] == anno]
-        if len(df_anno) > 0:
-            data_inizio = df_anno['Data'].min()
-            df_all.loc[df_all['Anno'] == anno, 'Giorno_Stagione'] = (
-                df_all.loc[df_all['Anno'] == anno, 'Data'] - data_inizio
-            ).dt.days
-    
-    # Filtra dati validi (ADR BED > 0)
-    df_all = df_all[df_all['ADR Bed'] > 0].copy()
-    
-    return df_all
+    try:
+        # Carica i tre file
+        df_2023 = pd.read_excel(file_2023)
+        df_2024 = pd.read_excel(file_2024)
+        df_2025 = pd.read_excel(file_2025)
+        
+        # Verifica che abbiano le colonne necessarie
+        required_columns = ['Giorno', 'ADR Bed']
+        
+        for year, df in [(2023, df_2023), (2024, df_2024), (2025, df_2025)]:
+            missing = [col for col in required_columns if col not in df.columns]
+            if missing:
+                raise ValueError(f"File {year}: Colonne mancanti: {missing}. Colonne presenti: {list(df.columns)}")
+        
+        # Aggiungi anno a ciascun dataframe
+        df_2023['Anno'] = 2023
+        df_2024['Anno'] = 2024
+        df_2025['Anno'] = 2025
+        
+        # Combina i dataframe
+        df_all = pd.concat([df_2023, df_2024, df_2025], ignore_index=True)
+        
+        # Parsing della data
+        df_all['Data'] = pd.to_datetime(df_all['Giorno'], format='%a %d/%m/%Y', errors='coerce')
+        
+        # Rimuovi righe senza data valida
+        df_all = df_all.dropna(subset=['Data'])
+        
+        if len(df_all) == 0:
+            raise ValueError("Nessuna data valida trovata nei file. Verifica il formato delle date.")
+        
+        # Estrai informazioni temporali
+        df_all['Mese'] = df_all['Data'].dt.month
+        df_all['Giorno_Settimana'] = df_all['Data'].dt.dayofweek
+        df_all['Settimana_Anno'] = df_all['Data'].dt.isocalendar().week.astype(int)
+        df_all['Giorno_Nome'] = df_all['Data'].dt.day_name()
+        df_all['Mese_Nome'] = df_all['Data'].dt.month_name()
+        
+        # Calcola il giorno relativo dall'inizio della stagione
+        for anno in [2023, 2024, 2025]:
+            df_anno = df_all[df_all['Anno'] == anno]
+            if len(df_anno) > 0:
+                data_inizio = df_anno['Data'].min()
+                giorni_stagione = (df_all.loc[df_all['Anno'] == anno, 'Data'] - data_inizio).dt.days
+                df_all.loc[df_all['Anno'] == anno, 'Giorno_Stagione'] = giorni_stagione
+        
+        # Filtra dati validi (ADR BED > 0)
+        df_all = df_all[df_all['ADR Bed'] > 0].copy()
+        
+        if len(df_all) < 30:
+            raise ValueError(f"Dati insufficienti dopo il filtraggio. Solo {len(df_all)} giorni validi trovati (minimo 30 richiesti).")
+        
+        return df_all
+        
+    except Exception as e:
+        raise Exception(f"Errore nel caricamento dei dati: {str(e)}")
 
 def calculate_seasonality_index(df):
     """Calcola l'indice di stagionalità per settimana"""
@@ -103,11 +120,24 @@ def calculate_seasonality_index(df):
 def build_forecast_models(df):
     """Costruisce diversi modelli di forecasting"""
     
-    # Prepara i dati per il training
-    df_train = df[['Giorno_Stagione', 'Settimana_Anno', 'Giorno_Settimana', 'Mese', 'ADR Bed']].dropna()
+    # Verifica che tutte le colonne necessarie esistano
+    required_cols = ['Giorno_Stagione', 'Settimana_Anno', 'Giorno_Settimana', 'Mese', 'ADR Bed']
+    missing_cols = [col for col in required_cols if col not in df.columns]
     
-    X = df_train[['Giorno_Stagione', 'Settimana_Anno', 'Giorno_Settimana', 'Mese']]
-    y = df_train['ADR Bed']
+    if missing_cols:
+        raise ValueError(f"Colonne mancanti nel dataset: {missing_cols}")
+    
+    # Prepara i dati per il training
+    df_train = df[required_cols].copy()
+    
+    # Rimuovi righe con valori mancanti
+    df_train = df_train.dropna()
+    
+    if len(df_train) < 10:
+        raise ValueError("Dati insufficienti per il training del modello (minimo 10 giorni richiesti)")
+    
+    X = df_train[['Giorno_Stagione', 'Settimana_Anno', 'Giorno_Settimana', 'Mese']].values
+    y = df_train['ADR Bed'].values
     
     models = {}
     
@@ -291,10 +321,42 @@ def main():
             df_historical = load_historical_data(uploaded_file_2023, uploaded_file_2024, uploaded_file_2025)
         
         st.sidebar.success(f"✅ Dati caricati: {len(df_historical)} giorni")
+        
+        # Mostra info di debug
+        with st.sidebar.expander("🔍 Info Dataset", expanded=False):
+            st.write(f"**Anni presenti:** {sorted(df_historical['Anno'].unique())}")
+            st.write(f"**Periodo:** {df_historical['Data'].min().strftime('%d/%m/%Y')} - {df_historical['Data'].max().strftime('%d/%m/%Y')}")
+            st.write(f"**ADR medio:** €{df_historical['ADR Bed'].mean():.2f}")
+            st.write(f"**Colonne disponibili:** {len(df_historical.columns)}")
     
     except Exception as e:
-        st.error(f"❌ Errore nel caricamento dei dati: {str(e)}")
-        st.info("Verifica che i file Excel abbiano il formato corretto con tutte le colonne necessarie.")
+        st.error(f"❌ Errore nel caricamento dei dati")
+        
+        with st.expander("📋 Dettagli Errore (per debug)", expanded=True):
+            st.code(str(e))
+            
+            # Prova a dare più informazioni
+            try:
+                st.write("**Tentativo di lettura file 2023:**")
+                df_test = pd.read_excel(uploaded_file_2023)
+                st.write(f"- Righe: {len(df_test)}")
+                st.write(f"- Colonne: {list(df_test.columns)}")
+                st.dataframe(df_test.head(3))
+            except Exception as e2:
+                st.error(f"Errore lettura file 2023: {str(e2)}")
+        
+        st.info("""
+        ### 📋 Verifica questi punti:
+        
+        1. **Formato File**: I file devono essere Excel (.xlsx o .xls)
+        2. **Colonne Richieste**: 
+           - `Giorno` (formato: "Dom 28/05/2023")
+           - `ADR Bed` (numero decimale)
+           - `% Occ.`, `Room nights`, `Bed nights`, `RevPar`
+        3. **Dati Validi**: Almeno 30 giorni con ADR Bed > 0
+        4. **Encoding**: Assicurati che i file non siano corrotti
+        """)
+        
         st.stop()
     
     # Sidebar per controlli
@@ -332,11 +394,25 @@ def main():
     ])
     
     # Calcola seasonality e modelli
-    with st.spinner('Costruzione modelli predittivi...'):
-        seasonality = calculate_seasonality_index(df_historical)
-        models = build_forecast_models(df_historical)
-        df_forecast = generate_forecast_2026(df_historical, models, seasonality, scenario)
-        metrics = calculate_forecast_metrics(df_forecast, df_historical)
+    try:
+        with st.spinner('Costruzione modelli predittivi...'):
+            seasonality = calculate_seasonality_index(df_historical)
+            models = build_forecast_models(df_historical)
+            df_forecast = generate_forecast_2026(df_historical, models, seasonality, scenario)
+            metrics = calculate_forecast_metrics(df_forecast, df_historical)
+    except Exception as e:
+        st.error("❌ Errore nella costruzione dei modelli predittivi")
+        
+        with st.expander("📋 Dettagli Errore", expanded=True):
+            st.code(str(e))
+            
+            st.write("**Colonne disponibili nel dataset:**")
+            st.write(list(df_historical.columns))
+            
+            st.write("**Primi 5 record:**")
+            st.dataframe(df_historical.head())
+        
+        st.stop()
     
     # =============================
     # TAB 1: FORECAST 2026
