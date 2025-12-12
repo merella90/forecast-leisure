@@ -101,12 +101,28 @@ def load_snapshot_2026(uploaded_file):
         df = df.dropna(subset=['Data'])
         df = df[df['ADR Bed'] > 0].copy()
         
+        # IMPORTANTE: Se esiste colonna Room Revenue, usala invece di calcolarla
+        if 'Room Revenue' in df.columns:
+            # Usa revenue reale dal file
+            df['Revenue'] = df['Room Revenue']
+            st.sidebar.info("✅ Usando Room Revenue dal file (non calcolata)")
+        else:
+            # Fallback: calcola da Room nights × ADR Bed
+            df['Revenue'] = df['Room nights'] * df['ADR Bed']
+            st.sidebar.warning("⚠️ Calcolando Revenue da RN × ADR Bed")
+        
         if len(df) > 0:
             # Usa la data minima come snapshot date (inizio stagione)
             df['Snapshot_Date'] = pd.to_datetime('today')
             df['Snapshot_Label'] = pd.to_datetime('today').strftime('%b %Y')
             
-            st.sidebar.write(f"✅ Snapshot caricata: {len(df)} giorni, {df['Room nights'].sum():.0f} RN, ADR €{df['ADR Bed'].mean():.2f}")
+            total_revenue = df['Revenue'].sum()
+            
+            st.sidebar.write(f"✅ Snapshot caricata:")
+            st.sidebar.write(f"   • {len(df)} giorni")
+            st.sidebar.write(f"   • {df['Room nights'].sum():.0f} RN")
+            st.sidebar.write(f"   • ADR €{df['ADR Bed'].mean():.2f}")
+            st.sidebar.write(f"   • Revenue €{total_revenue:,.0f}")
             
             return df
         else:
@@ -174,6 +190,17 @@ def compare_booking_curves(df_snapshots_2025, df_snapshot_2026, force_date=None,
             st.info(f"ℹ️ Snapshot più vicina: {closest_snapshot.strftime('%d/%m/%Y')}")
     
     # Calcola totali per confronto
+    # Usa colonna Revenue se disponibile, altrimenti calcola
+    if 'Revenue' in df_2025_comparable.columns:
+        revenue_2025 = df_2025_comparable['Revenue'].sum()
+    else:
+        revenue_2025 = (df_2025_comparable['Room nights'] * df_2025_comparable['ADR Bed']).sum()
+    
+    if 'Revenue' in df_snapshot_2026.columns:
+        revenue_2026 = df_snapshot_2026['Revenue'].sum()
+    else:
+        revenue_2026 = (df_snapshot_2026['Room nights'] * df_snapshot_2026['ADR Bed']).sum()
+    
     comparison = {
         'snapshot_date_2025': closest_snapshot,
         'snapshot_date_2026': snapshot_date_2026,
@@ -181,8 +208,8 @@ def compare_booking_curves(df_snapshots_2025, df_snapshot_2026, force_date=None,
         'room_nights_2026': df_snapshot_2026['Room nights'].sum(),
         'adr_2025': df_2025_comparable['ADR Bed'].mean(),
         'adr_2026': df_snapshot_2026['ADR Bed'].mean(),
-        'revenue_2025': (df_2025_comparable['Room nights'] * df_2025_comparable['ADR Bed']).sum(),
-        'revenue_2026': (df_snapshot_2026['Room nights'] * df_snapshot_2026['ADR Bed']).sum(),
+        'revenue_2025': revenue_2025,
+        'revenue_2026': revenue_2026,
     }
     
     # Calcola gap
