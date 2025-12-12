@@ -646,6 +646,51 @@ def main():
         help="Snapshot OTB attuale per stagione 2026 - NECESSARIO per forecast accurato"
     )
     
+    # Variabile per snapshot 2025 comparabile (opzionale ma consigliata)
+    uploaded_snapshot_2025_comparable = None
+    snapshot_2026_date = None
+    
+    # Se snapshot 2026 è caricato, analizza la data
+    if uploaded_snapshot_2026:
+        try:
+            # Leggi snapshot 2026 per estrarre la data
+            df_temp_2026 = pd.read_excel(uploaded_snapshot_2026)
+            
+            # Reset file pointer dopo lettura
+            uploaded_snapshot_2026.seek(0)
+            
+            # Prova a determinare la data dello snapshot (data odierna come fallback)
+            snapshot_2026_date = pd.to_datetime('today')
+            
+            # Calcola data comparabile 2025 (stesso giorno/mese dell'anno prima)
+            snapshot_2025_target_date = snapshot_2026_date.replace(year=2024)
+            
+            st.sidebar.markdown("---")
+            st.sidebar.markdown("### 🎯 Confronto Ottimale")
+            
+            st.sidebar.info(f"""
+            **Data Snapshot 2026:** {snapshot_2026_date.strftime('%d/%m/%Y')}
+            
+            **Data ideale snapshot 2025:** {snapshot_2025_target_date.strftime('%d/%m/%Y')}
+            
+            Per un confronto perfetto allo stesso booking window, carica anche lo snapshot 2025 di quella data.
+            """)
+            
+            uploaded_snapshot_2025_comparable = st.sidebar.file_uploader(
+                f"Snapshot 2025 al {snapshot_2025_target_date.strftime('%d/%m/%Y')} (Opzionale)",
+                type=['xlsx', 'xls'],
+                key='snapshot_2025_comparable',
+                help="Se disponibile, permette confronto esatto allo stesso booking window"
+            )
+            
+            if uploaded_snapshot_2025_comparable:
+                st.sidebar.success("✅ Confronto perfetto attivato!")
+            else:
+                st.sidebar.warning("⚠️ Userò snapshot 2025 più vicina disponibile su GitHub")
+        
+        except Exception as e:
+            st.sidebar.error(f"Errore lettura snapshot 2026: {str(e)}")
+    
     # Verifica che tutti i file siano stati caricati
     if not all([uploaded_file_2023, uploaded_file_2024, uploaded_file_2025]):
         st.warning("⚠️ Carica tutti e tre i file Excel (stagioni 2023, 2024, 2025) per procedere con il forecasting.")
@@ -696,6 +741,11 @@ def main():
         3. **Gap Analysis**: Room Nights, ADR, Revenue per mese
         4. **RM Suggestions**: Alert e azioni consigliate automatiche
         5. **Pickup Forecast**: Previsione basata su pickup reale
+        
+        ### 💡 Pro Tip
+        
+        Se hai anche lo snapshot 2025 **esattamente alla stessa data dell'anno scorso**, 
+        caricalo per un confronto perfetto allo stesso booking window!
         """)
         
         st.stop()
@@ -823,6 +873,23 @@ def main():
         # Carica snapshot 2025 e 2026 per forecast ibrido
         with st.spinner('Caricamento snapshot OTB...'):
             df_snapshots_2025 = load_snapshots_2025()
+            
+            # Se disponibile, usa snapshot 2025 comparabile caricato dall'utente
+            if uploaded_snapshot_2025_comparable:
+                df_snapshot_2025_user = load_snapshot_2026(uploaded_snapshot_2025_comparable)  # Riusa la stessa funzione
+                if df_snapshot_2025_user is not None:
+                    # Aggiorna la data dello snapshot
+                    df_snapshot_2025_user['Snapshot_Date'] = snapshot_2026_date.replace(year=2024)
+                    df_snapshot_2025_user['Snapshot_Label'] = snapshot_2026_date.replace(year=2024).strftime('%b %Y')
+                    
+                    # Aggiungi alle snapshot 2025
+                    if df_snapshots_2025 is not None:
+                        df_snapshots_2025 = pd.concat([df_snapshots_2025, df_snapshot_2025_user], ignore_index=True)
+                    else:
+                        df_snapshots_2025 = df_snapshot_2025_user
+                    
+                    st.sidebar.success("✅ Snapshot 2025 comparabile integrata!")
+            
             df_snapshot_2026 = load_snapshot_2026(uploaded_snapshot_2026)
         
         if df_snapshot_2026 is None:
@@ -1784,13 +1851,24 @@ def main():
     with tab5:
         st.header("📊 Booking Curve Analysis & Revenue Management")
         
-        # Le snapshot sono già caricate (2025 da GitHub, 2026 da sidebar)
-        st.success(f"✅ Snapshot caricate: 12 storiche 2025 + 1 attuale 2026")
+        # Le snapshot sono già caricate (2025 da GitHub + opzionale user, 2026 da sidebar)
+        if uploaded_snapshot_2025_comparable:
+            st.success(f"✅ Confronto perfetto attivato: Snapshot 2025 alla stessa data caricata!")
+        else:
+            st.info(f"ℹ️ Confronto con snapshot 2025 più vicina disponibile")
         
         st.markdown("---")
         
         # Calcola confronto
         comparison, df_2025_comparable = compare_booking_curves(df_snapshots_2025, df_snapshot_2026)
+        
+        # Mostra date di confronto
+        st.markdown(f"""
+        **Confronto in corso:**
+        - 📅 Snapshot 2026: {comparison['snapshot_date_2026'].strftime('%d/%m/%Y')}
+        - 📅 Snapshot 2025: {comparison['snapshot_date_2025'].strftime('%d/%m/%Y')}
+        - 📊 Differenza booking window: {(comparison['snapshot_date_2026'] - comparison['snapshot_date_2025'].replace(year=2025)).days} giorni
+        """)
         
         # Metriche principali
         st.markdown("### 📊 Gap Analysis: 2026 vs 2025")
