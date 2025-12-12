@@ -101,21 +101,38 @@ def calculate_booking_window(snapshot_date, stay_date):
     """Calcola i giorni di booking window (quanti giorni prima della data di soggiorno)"""
     return (stay_date - snapshot_date).days
 
-def compare_booking_curves(df_snapshots_2025, df_snapshot_2026):
+def compare_booking_curves(df_snapshots_2025, df_snapshot_2026, force_date=None):
     """Confronta le booking curves 2025 vs 2026"""
     
     # Data snapshot 2026
     snapshot_date_2026 = df_snapshot_2026['Snapshot_Date'].iloc[0]
     
-    # Trova snapshot 2025 più vicina
-    snapshots_2025_unique = df_snapshots_2025.groupby('Snapshot_Date').size().reset_index()
-    snapshots_2025_unique['diff'] = abs(
-        (snapshots_2025_unique['Snapshot_Date'] - snapshot_date_2026.replace(year=2024)).dt.days
-    )
-    closest_snapshot = snapshots_2025_unique.loc[snapshots_2025_unique['diff'].idxmin(), 'Snapshot_Date']
-    
-    # Filtra snapshot 2025 più vicina
-    df_2025_comparable = df_snapshots_2025[df_snapshots_2025['Snapshot_Date'] == closest_snapshot].copy()
+    # Se viene fornita una data specifica da usare, cerca quella esatta
+    if force_date is not None:
+        # Cerca snapshot 2025 alla data esatta
+        matching_snapshots = df_snapshots_2025[
+            df_snapshots_2025['Snapshot_Date'].dt.date == force_date.date()
+        ]
+        
+        if len(matching_snapshots) > 0:
+            closest_snapshot = force_date
+            df_2025_comparable = matching_snapshots.copy()
+        else:
+            # Fallback: cerca la più vicina
+            snapshots_2025_unique = df_snapshots_2025.groupby('Snapshot_Date').size().reset_index()
+            snapshots_2025_unique['diff'] = abs(
+                (snapshots_2025_unique['Snapshot_Date'] - force_date).dt.days
+            )
+            closest_snapshot = snapshots_2025_unique.loc[snapshots_2025_unique['diff'].idxmin(), 'Snapshot_Date']
+            df_2025_comparable = df_snapshots_2025[df_snapshots_2025['Snapshot_Date'] == closest_snapshot].copy()
+    else:
+        # Trova snapshot 2025 più vicina (logica originale)
+        snapshots_2025_unique = df_snapshots_2025.groupby('Snapshot_Date').size().reset_index()
+        snapshots_2025_unique['diff'] = abs(
+            (snapshots_2025_unique['Snapshot_Date'] - snapshot_date_2026.replace(year=2024)).dt.days
+        )
+        closest_snapshot = snapshots_2025_unique.loc[snapshots_2025_unique['diff'].idxmin(), 'Snapshot_Date']
+        df_2025_comparable = df_snapshots_2025[df_snapshots_2025['Snapshot_Date'] == closest_snapshot].copy()
     
     # Calcola totali per confronto
     comparison = {
@@ -1859,15 +1876,25 @@ def main():
         
         st.markdown("---")
         
-        # Calcola confronto
-        comparison, df_2025_comparable = compare_booking_curves(df_snapshots_2025, df_snapshot_2026)
+        # Calcola confronto - usa data specifica se snapshot comparabile è caricato
+        force_comparison_date = None
+        if uploaded_snapshot_2025_comparable:
+            force_comparison_date = snapshot_2026_date.replace(year=2024)
+        
+        comparison, df_2025_comparable = compare_booking_curves(
+            df_snapshots_2025, 
+            df_snapshot_2026,
+            force_date=force_comparison_date
+        )
         
         # Mostra date di confronto
+        booking_window_diff = abs((comparison['snapshot_date_2026'] - comparison['snapshot_date_2025'].replace(year=2025)).days)
+        
         st.markdown(f"""
         **Confronto in corso:**
         - 📅 Snapshot 2026: {comparison['snapshot_date_2026'].strftime('%d/%m/%Y')}
         - 📅 Snapshot 2025: {comparison['snapshot_date_2025'].strftime('%d/%m/%Y')}
-        - 📊 Differenza booking window: {(comparison['snapshot_date_2026'] - comparison['snapshot_date_2025'].replace(year=2025)).days} giorni
+        - 📊 Differenza booking window: **{booking_window_diff} giorni** {'✅ PERFETTO!' if booking_window_diff == 0 else '⚠️'}
         """)
         
         # Metriche principali
