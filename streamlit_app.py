@@ -400,11 +400,12 @@ def main():
     st.sidebar.metric("Totale Giorni", len(df_historical))
     
     # Tab principale
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📈 Forecast 2026", 
         "📊 Analisi Storica", 
         "🔍 Comparazione Anni",
-        "📉 Metriche Dettagliate"
+        "📅 Analisi Mensile",
+        "📉 Metriche & Export"
     ])
     
     # Calcola seasonality e modelli
@@ -575,17 +576,200 @@ def main():
             
             st.plotly_chart(fig_models, use_container_width=True)
         
-        # Tabella mensile
-        st.markdown("### 📅 Forecast Mensile 2026")
+        # Analisi mensile dettagliata
+        st.markdown("### 📅 Analisi Mensile Dettagliata 2026")
         
-        df_monthly = df_forecast.groupby('Mese_Nome').agg({
-            'ADR_Bed_Forecast': 'mean',
+        # Calcola metriche mensili per forecast
+        df_forecast['Mese_Num'] = df_forecast['Data'].dt.month
+        monthly_forecast = df_forecast.groupby(['Mese_Num', 'Mese_Nome']).agg({
+            'ADR_Bed_Forecast': ['mean', 'min', 'max', 'std'],
             'Data': 'count'
         }).reset_index()
-        df_monthly.columns = ['Mese', 'ADR Medio', 'Giorni']
-        df_monthly['ADR Medio'] = df_monthly['ADR Medio'].round(2)
         
-        st.dataframe(df_monthly, use_container_width=True)
+        monthly_forecast.columns = ['Mese_Num', 'Mese', 'ADR_Medio', 'ADR_Min', 'ADR_Max', 'ADR_StdDev', 'Giorni']
+        
+        # Calcola metriche mensili per dati storici
+        df_historical['Mese_Num'] = df_historical['Data'].dt.month
+        
+        monthly_2023 = df_historical[df_historical['Anno'] == 2023].groupby('Mese_Num')['ADR Bed'].mean()
+        monthly_2024 = df_historical[df_historical['Anno'] == 2024].groupby('Mese_Num')['ADR Bed'].mean()
+        monthly_2025 = df_historical[df_historical['Anno'] == 2025].groupby('Mese_Num')['ADR Bed'].mean()
+        
+        # Aggiungi confronto con anni precedenti
+        monthly_forecast['ADR_2025'] = monthly_forecast['Mese_Num'].map(monthly_2025)
+        monthly_forecast['ADR_2024'] = monthly_forecast['Mese_Num'].map(monthly_2024)
+        monthly_forecast['ADR_2023'] = monthly_forecast['Mese_Num'].map(monthly_2023)
+        
+        # Calcola variazioni
+        monthly_forecast['Var_vs_2025_%'] = (
+            (monthly_forecast['ADR_Medio'] - monthly_forecast['ADR_2025']) / monthly_forecast['ADR_2025'] * 100
+        ).round(2)
+        
+        # Formatta i valori
+        monthly_forecast['ADR_Medio'] = monthly_forecast['ADR_Medio'].round(2)
+        monthly_forecast['ADR_Min'] = monthly_forecast['ADR_Min'].round(2)
+        monthly_forecast['ADR_Max'] = monthly_forecast['ADR_Max'].round(2)
+        monthly_forecast['ADR_StdDev'] = monthly_forecast['ADR_StdDev'].round(2)
+        monthly_forecast['ADR_2025'] = monthly_forecast['ADR_2025'].round(2)
+        monthly_forecast['ADR_2024'] = monthly_forecast['ADR_2024'].round(2)
+        monthly_forecast['ADR_2023'] = monthly_forecast['ADR_2023'].round(2)
+        
+        # Tabella con tutte le informazioni
+        display_df = monthly_forecast[['Mese', 'Giorni', 'ADR_Medio', 'ADR_Min', 'ADR_Max', 
+                                       'ADR_2025', 'ADR_2024', 'ADR_2023', 'Var_vs_2025_%']].copy()
+        
+        st.dataframe(
+            display_df.style.format({
+                'ADR_Medio': '€{:.2f}',
+                'ADR_Min': '€{:.2f}',
+                'ADR_Max': '€{:.2f}',
+                'ADR_2025': '€{:.2f}',
+                'ADR_2024': '€{:.2f}',
+                'ADR_2023': '€{:.2f}',
+                'Var_vs_2025_%': '{:+.2f}%'
+            }).background_gradient(subset=['Var_vs_2025_%'], cmap='RdYlGn', vmin=-10, vmax=10),
+            use_container_width=True
+        )
+        
+        # Grafico comparativo mensile
+        st.markdown("#### 📊 Confronto ADR Mensile: 2023-2026")
+        
+        fig_monthly_comparison = go.Figure()
+        
+        # Ordina i mesi
+        monthly_plot = monthly_forecast.sort_values('Mese_Num')
+        
+        # 2023
+        fig_monthly_comparison.add_trace(go.Scatter(
+            x=monthly_plot['Mese'],
+            y=monthly_plot['ADR_2023'],
+            mode='lines+markers',
+            name='2023',
+            line=dict(color='#3498db', width=2),
+            marker=dict(size=8)
+        ))
+        
+        # 2024
+        fig_monthly_comparison.add_trace(go.Scatter(
+            x=monthly_plot['Mese'],
+            y=monthly_plot['ADR_2024'],
+            mode='lines+markers',
+            name='2024',
+            line=dict(color='#9b59b6', width=2),
+            marker=dict(size=8)
+        ))
+        
+        # 2025
+        fig_monthly_comparison.add_trace(go.Scatter(
+            x=monthly_plot['Mese'],
+            y=monthly_plot['ADR_2025'],
+            mode='lines+markers',
+            name='2025',
+            line=dict(color='#2ecc71', width=2),
+            marker=dict(size=8)
+        ))
+        
+        # 2026 Forecast
+        fig_monthly_comparison.add_trace(go.Scatter(
+            x=monthly_plot['Mese'],
+            y=monthly_plot['ADR_Medio'],
+            mode='lines+markers',
+            name='2026 Forecast',
+            line=dict(color='#e74c3c', width=3, dash='dash'),
+            marker=dict(size=10, symbol='star')
+        ))
+        
+        # Range min-max 2026
+        fig_monthly_comparison.add_trace(go.Scatter(
+            x=monthly_plot['Mese'],
+            y=monthly_plot['ADR_Max'],
+            mode='lines',
+            name='Range 2026',
+            line=dict(width=0),
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        fig_monthly_comparison.add_trace(go.Scatter(
+            x=monthly_plot['Mese'],
+            y=monthly_plot['ADR_Min'],
+            mode='lines',
+            name='Range Min-Max 2026',
+            line=dict(width=0),
+            fillcolor='rgba(231, 76, 60, 0.15)',
+            fill='tonexty',
+            showlegend=True
+        ))
+        
+        fig_monthly_comparison.update_layout(
+            title="Evoluzione ADR BED Mensile: Storico vs Forecast",
+            xaxis_title="Mese",
+            yaxis_title="ADR BED (€)",
+            hovermode='x unified',
+            height=500,
+            template='plotly_white',
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        
+        st.plotly_chart(fig_monthly_comparison, use_container_width=True)
+        
+        # Grafico variazioni percentuali
+        st.markdown("#### 📈 Variazioni Percentuali vs 2025")
+        
+        fig_variations = go.Figure()
+        
+        colors = ['#e74c3c' if x >= 0 else '#3498db' for x in monthly_plot['Var_vs_2025_%']]
+        
+        fig_variations.add_trace(go.Bar(
+            x=monthly_plot['Mese'],
+            y=monthly_plot['Var_vs_2025_%'],
+            text=monthly_plot['Var_vs_2025_%'].apply(lambda x: f"{x:+.1f}%"),
+            textposition='outside',
+            marker_color=colors,
+            name='Variazione %'
+        ))
+        
+        fig_variations.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1)
+        
+        fig_variations.update_layout(
+            title="Crescita/Decrescita Mensile 2026 vs 2025",
+            xaxis_title="Mese",
+            yaxis_title="Variazione %",
+            height=400,
+            template='plotly_white',
+            showlegend=False
+        )
+        
+        st.plotly_chart(fig_variations, use_container_width=True)
+        
+        # Insights mensili
+        st.markdown("#### 💡 Insights Mensili")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            best_month = monthly_plot.loc[monthly_plot['ADR_Medio'].idxmax()]
+            st.metric(
+                "🏆 Mese Migliore",
+                best_month['Mese'],
+                f"€{best_month['ADR_Medio']:.2f}"
+            )
+        
+        with col2:
+            worst_month = monthly_plot.loc[monthly_plot['ADR_Medio'].idxmin()]
+            st.metric(
+                "📉 Mese Più Debole",
+                worst_month['Mese'],
+                f"€{worst_month['ADR_Medio']:.2f}"
+            )
+        
+        with col3:
+            highest_growth = monthly_plot.loc[monthly_plot['Var_vs_2025_%'].idxmax()]
+            st.metric(
+                "🚀 Maggior Crescita",
+                highest_growth['Mese'],
+                f"{highest_growth['Var_vs_2025_%']:+.1f}%"
+            )
     
     # =============================
     # TAB 2: ANALISI STORICA
@@ -724,9 +908,267 @@ def main():
         st.plotly_chart(fig_heatmap, use_container_width=True)
     
     # =============================
-    # TAB 4: METRICHE DETTAGLIATE
+    # TAB 4: ANALISI MENSILE
     # =============================
     with tab4:
+        st.header("Analisi Mensile Approfondita 2026")
+        
+        # Prepara dati mensili completi
+        df_forecast['Mese_Num'] = df_forecast['Data'].dt.month
+        
+        # Selettore mese
+        mesi_forecast = sorted(df_forecast['Mese_Nome'].unique())
+        mese_selezionato = st.selectbox("Seleziona Mese per Analisi Dettagliata", mesi_forecast, key='monthly_selector')
+        
+        # Filtra dati per il mese selezionato
+        df_mese_2026 = df_forecast[df_forecast['Mese_Nome'] == mese_selezionato].copy()
+        mese_num = df_mese_2026['Mese_Num'].iloc[0]
+        
+        # Dati storici per lo stesso mese
+        df_mese_storico = df_historical[df_historical['Mese_Num'] == mese_num]
+        
+        # Metriche del mese
+        st.markdown(f"### 📊 Metriche {mese_selezionato} 2026")
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        adr_mese_2026 = df_mese_2026['ADR_Bed_Forecast'].mean()
+        adr_mese_2025 = df_mese_storico[df_mese_storico['Anno'] == 2025]['ADR Bed'].mean() if len(df_mese_storico[df_mese_storico['Anno'] == 2025]) > 0 else 0
+        var_mese = ((adr_mese_2026 - adr_mese_2025) / adr_mese_2025 * 100) if adr_mese_2025 > 0 else 0
+        
+        with col1:
+            st.metric(
+                "ADR Medio Mese",
+                f"€{adr_mese_2026:.2f}",
+                delta=f"{var_mese:+.1f}% vs 2025"
+            )
+        
+        with col2:
+            st.metric(
+                "ADR Minimo",
+                f"€{df_mese_2026['ADR_Bed_Forecast'].min():.2f}"
+            )
+        
+        with col3:
+            st.metric(
+                "ADR Massimo",
+                f"€{df_mese_2026['ADR_Bed_Forecast'].max():.2f}"
+            )
+        
+        with col4:
+            st.metric(
+                "Giorni nel Mese",
+                len(df_mese_2026)
+            )
+        
+        with col5:
+            # Assumendo 308 camere totali (come da VOI Alimini)
+            camere_totali = st.number_input("Camere Totali", min_value=1, value=308, key='camere_totali')
+            posti_letto_stimati = camere_totali * 2.5  # Media posti per camera
+            st.metric(
+                "Posti Letto",
+                f"{int(posti_letto_stimati)}"
+            )
+        
+        st.markdown("---")
+        
+        # Revenue Projection
+        st.markdown(f"### 💰 Proiezione Revenue {mese_selezionato} 2026")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            occupancy_assumption = st.slider(
+                "Occupazione Stimata (%)",
+                min_value=10,
+                max_value=100,
+                value=75,
+                step=5,
+                help="Imposta l'occupazione stimata per calcolare il revenue potenziale"
+            )
+        
+        with col2:
+            pax_per_camera = st.slider(
+                "Pax per Camera",
+                min_value=1.5,
+                max_value=3.0,
+                value=2.2,
+                step=0.1
+            )
+        
+        # Calcoli revenue
+        room_nights_mese = (camere_totali * len(df_mese_2026) * occupancy_assumption / 100)
+        bed_nights_mese = room_nights_mese * pax_per_camera
+        revenue_mese = bed_nights_mese * adr_mese_2026
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                "Room Nights Previsti",
+                f"{room_nights_mese:,.0f}",
+                help="Camere x Giorni x Occupazione%"
+            )
+        
+        with col2:
+            st.metric(
+                "Bed Nights Previsti",
+                f"{bed_nights_mese:,.0f}",
+                help="Room Nights x Pax per Camera"
+            )
+        
+        with col3:
+            st.metric(
+                "Revenue Stimato",
+                f"€{revenue_mese:,.0f}",
+                help="Bed Nights x ADR BED"
+            )
+        
+        st.markdown("---")
+        
+        # Grafico giornaliero del mese
+        st.markdown(f"### 📅 Andamento Giornaliero {mese_selezionato}")
+        
+        fig_daily = go.Figure()
+        
+        # 2026 Forecast
+        df_mese_2026_sorted = df_mese_2026.sort_values('Data')
+        fig_daily.add_trace(go.Scatter(
+            x=df_mese_2026_sorted['Data'].dt.day,
+            y=df_mese_2026_sorted['ADR_Bed_Forecast'],
+            mode='lines+markers',
+            name='2026 Forecast',
+            line=dict(color='#e74c3c', width=3),
+            marker=dict(size=8),
+            text=df_mese_2026_sorted['Giorno_Nome'],
+            hovertemplate='<b>Giorno %{x}</b><br>%{text}<br>ADR: €%{y:.2f}<extra></extra>'
+        ))
+        
+        # Aggiungi dati storici se disponibili
+        for anno, colore in [(2025, '#2ecc71'), (2024, '#9b59b6'), (2023, '#3498db')]:
+            df_anno_mese = df_mese_storico[df_mese_storico['Anno'] == anno].sort_values('Data')
+            if len(df_anno_mese) > 0:
+                fig_daily.add_trace(go.Scatter(
+                    x=df_anno_mese['Data'].dt.day,
+                    y=df_anno_mese['ADR Bed'],
+                    mode='lines+markers',
+                    name=f'{anno}',
+                    line=dict(color=colore, width=2, dash='dot'),
+                    marker=dict(size=6),
+                    opacity=0.7
+                ))
+        
+        # Evidenzia weekend
+        weekend_days = df_mese_2026_sorted[df_mese_2026_sorted['Giorno_Settimana'].isin([5, 6])]['Data'].dt.day
+        for day in weekend_days:
+            fig_daily.add_vrect(
+                x0=day-0.5, x1=day+0.5,
+                fillcolor="lightblue", opacity=0.1,
+                layer="below", line_width=0
+            )
+        
+        fig_daily.update_layout(
+            title=f"ADR BED Giornaliero - {mese_selezionato}",
+            xaxis_title="Giorno del Mese",
+            yaxis_title="ADR BED (€)",
+            hovermode='x unified',
+            height=450,
+            template='plotly_white',
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        
+        st.plotly_chart(fig_daily, use_container_width=True)
+        
+        # Analisi per giorno della settimana
+        st.markdown(f"### 📊 Analisi per Giorno della Settimana - {mese_selezionato}")
+        
+        df_mese_2026['Giorno_Nome_IT'] = df_mese_2026['Giorno_Settimana'].map({
+            0: 'Lunedì', 1: 'Martedì', 2: 'Mercoledì', 3: 'Giovedì',
+            4: 'Venerdì', 5: 'Sabato', 6: 'Domenica'
+        })
+        
+        dow_analysis = df_mese_2026.groupby('Giorno_Nome_IT')['ADR_Bed_Forecast'].agg(['mean', 'count']).reset_index()
+        dow_analysis.columns = ['Giorno', 'ADR Medio', 'Occorrenze']
+        dow_analysis['ADR Medio'] = dow_analysis['ADR Medio'].round(2)
+        
+        # Ordina giorni settimana
+        giorni_ordine = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica']
+        dow_analysis['Giorno'] = pd.Categorical(dow_analysis['Giorno'], categories=giorni_ordine, ordered=True)
+        dow_analysis = dow_analysis.sort_values('Giorno')
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            fig_dow = go.Figure()
+            
+            colors_dow = ['#3498db' if g in ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì'] 
+                         else '#e74c3c' for g in dow_analysis['Giorno']]
+            
+            fig_dow.add_trace(go.Bar(
+                x=dow_analysis['Giorno'],
+                y=dow_analysis['ADR Medio'],
+                text=dow_analysis['ADR Medio'].apply(lambda x: f"€{x:.0f}"),
+                textposition='outside',
+                marker_color=colors_dow,
+                name='ADR Medio'
+            ))
+            
+            fig_dow.update_layout(
+                title="ADR Medio per Giorno della Settimana",
+                xaxis_title="Giorno",
+                yaxis_title="ADR BED (€)",
+                height=350,
+                template='plotly_white',
+                showlegend=False
+            )
+            
+            st.plotly_chart(fig_dow, use_container_width=True)
+        
+        with col2:
+            st.markdown("#### Statistiche Settimanali")
+            
+            adr_weekday = dow_analysis[dow_analysis['Giorno'].isin(['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì'])]['ADR Medio'].mean()
+            adr_weekend = dow_analysis[dow_analysis['Giorno'].isin(['Sabato', 'Domenica'])]['ADR Medio'].mean()
+            premium_weekend = ((adr_weekend - adr_weekday) / adr_weekday * 100) if adr_weekday > 0 else 0
+            
+            st.metric("ADR Infrasettimanale", f"€{adr_weekday:.2f}")
+            st.metric("ADR Weekend", f"€{adr_weekend:.2f}")
+            st.metric("Premium Weekend", f"+{premium_weekend:.1f}%")
+        
+        # Tabella dettagliata giornaliera
+        st.markdown(f"### 📋 Dettaglio Giornaliero {mese_selezionato} 2026")
+        
+        df_detail = df_mese_2026_sorted[['Data', 'Giorno_Nome_IT', 'ADR_Bed_Forecast']].copy()
+        df_detail['Data'] = df_detail['Data'].dt.strftime('%d/%m/%Y')
+        df_detail.columns = ['Data', 'Giorno', 'ADR BED Forecast']
+        df_detail['ADR BED Forecast'] = df_detail['ADR BED Forecast'].round(2)
+        
+        # Aggiungi revenue stimato giornaliero
+        bed_nights_giornalieri = (camere_totali * pax_per_camera * occupancy_assumption / 100)
+        df_detail['Revenue Stimato'] = (df_detail['ADR BED Forecast'] * bed_nights_giornalieri).round(0)
+        
+        st.dataframe(
+            df_detail.style.format({
+                'ADR BED Forecast': '€{:.2f}',
+                'Revenue Stimato': '€{:,.0f}'
+            }),
+            use_container_width=True,
+            height=400
+        )
+        
+        # Export mensile
+        csv_monthly = df_detail.to_csv(index=False)
+        st.download_button(
+            label=f"📥 Scarica Dettaglio {mese_selezionato} 2026 (CSV)",
+            data=csv_monthly,
+            file_name=f"voi_alimini_{mese_selezionato.lower()}_2026_forecast.csv",
+            mime="text/csv"
+        )
+    
+    # =============================
+    # TAB 5: METRICHE DETTAGLIATE
+    # =============================
+    with tab5:
         st.header("Metriche Dettagliate e Insights")
         
         col1, col2 = st.columns(2)
