@@ -7,6 +7,16 @@ from datetime import datetime, timedelta
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.ensemble import RandomForestRegressor
+
+# Try importing SARIMA
+SARIMA_AVAILABLE = False
+try:
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+    import warnings
+    warnings.filterwarnings('ignore')
+    SARIMA_AVAILABLE = True
+except ImportError:
+    pass  # SARIMA not available, will use RF only
 import warnings
 import io
 warnings.filterwarnings('ignore')
@@ -603,6 +613,31 @@ def build_forecast_models(df):
     rf_model.fit(X, y)
     models['RandomForest'] = rf_model
     
+    # 4. SARIMA (se disponibile) - ottimo per dati stagionali
+    if SARIMA_AVAILABLE:
+        st.sidebar.info("✅ SARIMA disponibile - training in corso...")
+        try:
+            # Prepara serie temporale
+            df_ts = df_train.copy()
+            df_ts = df_ts.sort_values('Giorno_Stagione')
+            df_ts = df_ts.set_index(pd.date_range(start='2023-05-01', periods=len(df_ts), freq='D'))
+            
+            # SARIMA con parametri per stagionalità settimanale
+            sarima_model = SARIMAX(df_ts['ADR Bed'], 
+                                   order=(1, 1, 1),  # (p, d, q)
+                                   seasonal_order=(1, 1, 1, 7),  # (P, D, Q, s) - stagionalità settimanale
+                                   enforce_stationarity=False,
+                                   enforce_invertibility=False)
+            sarima_fit = sarima_model.fit(disp=False, maxiter=50)
+            models['SARIMA'] = sarima_fit
+            st.sidebar.success("✅ SARIMA allenato con successo!")
+        except Exception as e:
+            st.sidebar.error(f"❌ SARIMA training fallito: {str(e)[:100]}")
+            models['SARIMA'] = None
+    else:
+        st.sidebar.warning("⚠️ statsmodels non disponibile - usando solo RF")
+        models['SARIMA'] = None
+    
     return models
 
 def generate_forecast_2026(df_historical, models, seasonality, scenario='base'):
@@ -648,13 +683,25 @@ def generate_forecast_2026(df_historical, models, seasonality, scenario='base'):
     df_2026['ADR_Bed_Poly'] = pred_poly
     df_2026['ADR_Bed_RF'] = pred_rf
     
-    # Media ensemble con pesi
-    weights = {'Linear': 0.2, 'Poly': 0.3, 'RF': 0.5}
-    df_2026['ADR_Bed_Ensemble'] = (
-        weights['Linear'] * pred_linear +
-        weights['Poly'] * pred_poly +
-        weights['RF'] * pred_rf
-    )
+    # NUOVO APPROCCIO: Usa principalmente RF (più stabile per hotel stagionale)
+    # Poly crea picchi irrealistici, quindi lo usiamo minimamente
+    if 'SARIMA' in models and models['SARIMA'] is not None:
+        try:
+            # Predici con SARIMA
+            sarima_pred = models['SARIMA'].forecast(steps=len(df_2026))
+            df_2026['ADR_Bed_SARIMA'] = sarima_pred.values
+            
+            # Ensemble: 80% RF + 20% SARIMA (entrambi stabili)
+            df_2026['ADR_Bed_Ensemble'] = (
+                0.80 * pred_rf +
+                0.20 * df_2026['ADR_Bed_SARIMA']
+            )
+        except Exception as e:
+            # Fallback: usa solo RF
+            df_2026['ADR_Bed_Ensemble'] = pred_rf
+    else:
+        # Se SARIMA non disponibile, usa solo RF (più stabile di Poly)
+        df_2026['ADR_Bed_Ensemble'] = pred_rf
     
     # Applica indice di stagionalità
     df_2026 = df_2026.merge(seasonality[['Settimana_Anno', 'Indice_Stagionalita']], 
@@ -1449,8 +1496,18 @@ def main():
                 y=df_forecast['ADR_Bed_RF'],
                 mode='lines',
                 name='Random Forest',
-                line=dict(dash='dashdot')
+                line=dict(dash='dashdot', color='green')
             ))
+            
+            # Aggiungi SARIMA se disponibile
+            if 'ADR_Bed_SARIMA' in df_forecast.columns:
+                fig_models.add_trace(go.Scatter(
+                    x=df_forecast['Data'],
+                    y=df_forecast['ADR_Bed_SARIMA'],
+                    mode='lines',
+                    name='SARIMA',
+                    line=dict(dash='longdash', color='cyan', width=2)
+                ))
             
             fig_models.add_trace(go.Scatter(
                 x=df_forecast['Data'],
@@ -1469,9 +1526,21 @@ def main():
             )
             
             st.plotly_chart(fig_models, use_container_width=True)
+            
+            # Info sui pesi del modello
+            if 'SARIMA' in models and models['SARIMA'] is not None:
+                st.caption("ℹ️ **Ensemble ottimizzato per hotel stagionale:** Random Forest 80% + SARIMA 20% (elimina picchi anomali, cattura stagionalità)")
+            else:
+                st.caption("ℹ️ **Modello finale:** Random Forest 100% (più stabile per hotel stagionale, elimina picchi anomali del Polynomial)")
         
         # Analisi mensile dettagliata
         st.markdown("### 📅 Analisi Mensile Dettagliata 2026")
+        
+        # Toggle tra Forecast e Effettivo
+        col_toggle, col_spacer = st.columns([1, 3])
+        with col_toggle:
+            show_actual = st.toggle("📊 Mostra Dati Effettivi (OTB 2026)", value=False, 
+                                   help="Passa dalla previsione ai dati reali caricati dal file snapshot 2026")
         
         # Calcola metriche mensili per forecast
         df_forecast['Mese_Num'] = df_forecast['Data'].dt.month
@@ -1486,6 +1555,38 @@ def main():
         monthly_forecast.columns = ['Mese_Num', 'Mese', 'ADR_Medio', 'ADR_Min', 'ADR_Max', 'ADR_StdDev', 
                                     'Room_Nights', 'Revenue', 'Occupazione', 'Giorni']
         
+        # Se l'utente vuole vedere i dati effettivi E sono disponibili
+        if show_actual and df_snapshot_2026 is not None:
+            # Calcola metriche dai dati OTB reali
+            df_snapshot_2026['Mese_Num'] = df_snapshot_2026['Data'].dt.month
+            df_snapshot_2026['Mese_Nome'] = df_snapshot_2026['Data'].dt.month_name()
+            
+            monthly_actual = df_snapshot_2026.groupby(['Mese_Num', 'Mese_Nome']).agg({
+                'ADR Bed': ['mean', 'min', 'max', 'std'],
+                'Room nights': 'sum',
+                'Revenue': 'sum',
+                'Data': 'count'
+            }).reset_index()
+            
+            monthly_actual.columns = ['Mese_Num', 'Mese', 'ADR_Medio', 'ADR_Min', 'ADR_Max', 'ADR_StdDev',
+                                     'Room_Nights', 'Revenue', 'Giorni']
+            
+            # Calcola occupazione dai dati reali (se disponibile camere_totali)
+            if 'camere_totali' in locals():
+                monthly_actual['Occupazione'] = (monthly_actual['Room_Nights'] / 
+                                                (camere_totali * monthly_actual['Giorni']) * 100)
+            else:
+                monthly_actual['Occupazione'] = 0.0
+            
+            # Usa i dati effettivi
+            monthly_data_to_show = monthly_actual.copy()
+            st.info("📊 **Visualizzazione Dati Effettivi OTB 2026** (dal file caricato)")
+        else:
+            # Usa i forecast
+            monthly_data_to_show = monthly_forecast.copy()
+            if show_actual and df_snapshot_2026 is None:
+                st.warning("⚠️ Nessuno snapshot 2026 caricato. Carica un file per vedere i dati effettivi.")
+        
         # Calcola metriche mensili per dati storici
         df_historical['Mese_Num'] = df_historical['Data'].dt.month
         
@@ -1494,30 +1595,45 @@ def main():
         monthly_2025 = df_historical[df_historical['Anno'] == 2025].groupby('Mese_Num')['ADR Bed'].mean()
         
         # Aggiungi confronto con anni precedenti
-        monthly_forecast['ADR_2025'] = monthly_forecast['Mese_Num'].map(monthly_2025)
-        monthly_forecast['ADR_2024'] = monthly_forecast['Mese_Num'].map(monthly_2024)
-        monthly_forecast['ADR_2023'] = monthly_forecast['Mese_Num'].map(monthly_2023)
+        # Usa i dati selezionati (forecast o effettivo)
+        monthly_data_to_show['ADR_2025'] = monthly_data_to_show['Mese_Num'].map(monthly_2025)
+        monthly_data_to_show['ADR_2024'] = monthly_data_to_show['Mese_Num'].map(monthly_2024)
+        monthly_data_to_show['ADR_2023'] = monthly_data_to_show['Mese_Num'].map(monthly_2023)
         
         # Calcola variazioni
-        monthly_forecast['Var_vs_2025_%'] = (
-            (monthly_forecast['ADR_Medio'] - monthly_forecast['ADR_2025']) / monthly_forecast['ADR_2025'] * 100
+        monthly_data_to_show['Var_vs_2025_%'] = (
+            (monthly_data_to_show['ADR_Medio'] - monthly_data_to_show['ADR_2025']) / monthly_data_to_show['ADR_2025'] * 100
         ).round(2)
         
         # Formatta i valori
-        monthly_forecast['ADR_Medio'] = monthly_forecast['ADR_Medio'].round(2)
-        monthly_forecast['ADR_Min'] = monthly_forecast['ADR_Min'].round(2)
-        monthly_forecast['ADR_Max'] = monthly_forecast['ADR_Max'].round(2)
-        monthly_forecast['ADR_StdDev'] = monthly_forecast['ADR_StdDev'].round(2)
-        monthly_forecast['ADR_2025'] = monthly_forecast['ADR_2025'].round(2)
-        monthly_forecast['ADR_2024'] = monthly_forecast['ADR_2024'].round(2)
-        monthly_forecast['ADR_2023'] = monthly_forecast['ADR_2023'].round(2)
-        monthly_forecast['Room_Nights'] = monthly_forecast['Room_Nights'].round(0)
-        monthly_forecast['Revenue'] = monthly_forecast['Revenue'].round(0)
-        monthly_forecast['Occupazione'] = (monthly_forecast['Occupazione'] * 100).round(1)
+        monthly_data_to_show['ADR_Medio'] = monthly_data_to_show['ADR_Medio'].round(2)
+        monthly_data_to_show['ADR_2025'] = monthly_data_to_show['ADR_2025'].round(2)
+        monthly_data_to_show['Room_Nights'] = monthly_data_to_show['Room_Nights'].round(0)
+        monthly_data_to_show['Revenue'] = monthly_data_to_show['Revenue'].round(0)
+        
+        # Formatta occupazione
+        if not show_actual:
+            monthly_data_to_show['Occupazione'] = (monthly_data_to_show['Occupazione'] * 100).round(1)
+        else:
+            monthly_data_to_show['Occupazione'] = monthly_data_to_show['Occupazione'].round(1)
         
         # Tabella con tutte le informazioni
-        display_df = monthly_forecast[['Mese', 'Giorni', 'ADR_Medio', 'Room_Nights', 'Occupazione', 'Revenue',
+        display_df = monthly_data_to_show[['Mese', 'Giorni', 'ADR_Medio', 'Room_Nights', 'Occupazione', 'Revenue',
                                        'ADR_2025', 'Var_vs_2025_%']].copy()
+        
+        # AGGIUNGI RIGA TOTALE
+        totale_row = pd.DataFrame({
+            'Mese': ['TOTALE'],
+            'Giorni': [display_df['Giorni'].sum()],
+            'ADR_Medio': [display_df['ADR_Medio'].mean()],  # Media ADR
+            'Room_Nights': [display_df['Room_Nights'].sum()],
+            'Occupazione': [display_df['Occupazione'].mean()],  # Media occupazione
+            'Revenue': [display_df['Revenue'].sum()],
+            'ADR_2025': [display_df['ADR_2025'].mean()],  # Media ADR 2025
+            'Var_vs_2025_%': [(display_df['ADR_Medio'].mean() - display_df['ADR_2025'].mean()) / display_df['ADR_2025'].mean() * 100]
+        })
+        
+        display_df = pd.concat([display_df, totale_row], ignore_index=True)
         
         # Formatta e colora le celle basandosi sulla variazione
         def color_variation(val):
@@ -1532,6 +1648,10 @@ def main():
             else:
                 return 'background-color: #f8d7da; color: #721c24'  # Rosso
         
+        # Stile per evidenziare riga TOTALE
+        def highlight_total(s):
+            return ['background-color: #17a2b8; color: white; font-weight: bold' if s['Mese'] == 'TOTALE' else '' for _ in s]
+        
         styled_df = display_df.style.format({
             'ADR_Medio': '€{:.2f}',
             'Room_Nights': '{:,.0f}',
@@ -1539,14 +1659,21 @@ def main():
             'Revenue': '€{:,.0f}',
             'ADR_2025': '€{:.2f}',
             'Var_vs_2025_%': '{:+.2f}%'
-        }).applymap(color_variation, subset=['Var_vs_2025_%'])
+        }).apply(highlight_total, axis=1).applymap(color_variation, subset=['Var_vs_2025_%'])
         
         st.dataframe(styled_df, use_container_width=True)
         
-        # Grafico comparativo mensile
+        # Grafico comparativo mensile (usa sempre forecast per confronto storico)
         st.markdown("#### 📊 Confronto ADR Mensile: 2023-2026")
         
         fig_monthly_comparison = go.Figure()
+        
+        # Per il grafico, usa sempre monthly_forecast (che ha dati storici completi)
+        # Aggiungi dati storici a monthly_forecast se non ci sono già
+        if 'ADR_2023' not in monthly_forecast.columns:
+            monthly_forecast['ADR_2025'] = monthly_forecast['Mese_Num'].map(monthly_2025)
+            monthly_forecast['ADR_2024'] = monthly_forecast['Mese_Num'].map(monthly_2024)
+            monthly_forecast['ADR_2023'] = monthly_forecast['Mese_Num'].map(monthly_2023)
         
         # Ordina i mesi
         monthly_plot = monthly_forecast.sort_values('Mese_Num')
