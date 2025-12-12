@@ -263,6 +263,12 @@ def calculate_forecast_metrics(df_forecast, df_historical):
         'Giorni_Totali': len(df_forecast)
     }
     
+    # Aggiungi metriche Room Nights se disponibili
+    if 'Room_Nights_Forecast' in df_forecast.columns:
+        metrics['Room_Nights_Totali'] = df_forecast['Room_Nights_Forecast'].sum()
+        metrics['Room_Nights_Medi_Giorno'] = df_forecast['Room_Nights_Forecast'].mean()
+        metrics['Occupazione_Media'] = df_forecast['Occupazione_Forecast'].mean() * 100
+    
     # Calcola variazioni percentuali
     metrics['Variazione_vs_2025'] = (
         (metrics['ADR_Medio_Forecast'] - metrics['ADR_Medio_2025']) / metrics['ADR_Medio_2025'] * 100
@@ -395,6 +401,39 @@ def main():
     show_models = st.sidebar.checkbox("Mostra confronto modelli", value=False)
     
     st.sidebar.markdown("---")
+    
+    # Configurazione Room Nights
+    st.sidebar.markdown("### 🏨 Configurazione Struttura")
+    
+    camere_totali = st.sidebar.number_input(
+        "Numero Camere Totali",
+        min_value=100,
+        max_value=500,
+        value=308,
+        step=1,
+        help="Numero totale di camere dell'hotel"
+    )
+    
+    st.sidebar.markdown("### 📊 Occupazione Forecast")
+    
+    occupancy_scenario = st.sidebar.selectbox(
+        "Scenario Occupazione",
+        options=['conservativo', 'moderato', 'ottimistico'],
+        index=1,
+        help="Livello di occupazione previsto per il 2026"
+    )
+    
+    occupancy_scenarios = {
+        'conservativo': 0.65,  # 65%
+        'moderato': 0.75,      # 75%
+        'ottimistico': 0.85    # 85%
+    }
+    
+    occupancy_base = occupancy_scenarios[occupancy_scenario]
+    
+    st.sidebar.info(f"📈 Occupazione base: {occupancy_base*100:.0f}%")
+    
+    st.sidebar.markdown("---")
     st.sidebar.markdown("### 📊 Dati Storici")
     st.sidebar.metric("Stagioni Analizzate", "3 (2023-2025)")
     st.sidebar.metric("Totale Giorni", len(df_historical))
@@ -414,6 +453,25 @@ def main():
             seasonality = calculate_seasonality_index(df_historical)
             models = build_forecast_models(df_historical)
             df_forecast = generate_forecast_2026(df_historical, models, seasonality, scenario)
+            
+            # Aggiungi forecast Room Nights e Occupazione
+            # Calcola occupazione con stagionalità
+            df_forecast['Occupazione_Forecast'] = occupancy_base * df_forecast['Indice_Stagionalita']
+            df_forecast['Occupazione_Forecast'] = df_forecast['Occupazione_Forecast'].clip(upper=0.98)  # Max 98%
+            
+            # Calcola Room Nights
+            df_forecast['Room_Nights_Forecast'] = camere_totali * df_forecast['Occupazione_Forecast']
+            
+            # Calcola Bed Nights (assumendo 2.2 pax/camera medio)
+            pax_per_camera_medio = 2.2
+            df_forecast['Bed_Nights_Forecast'] = df_forecast['Room_Nights_Forecast'] * pax_per_camera_medio
+            
+            # Calcola Revenue
+            df_forecast['Revenue_Forecast'] = df_forecast['Bed_Nights_Forecast'] * df_forecast['ADR_Bed_Forecast']
+            
+            # Calcola RevPAR
+            df_forecast['RevPAR_Forecast'] = df_forecast['ADR_Bed_Forecast'] * df_forecast['Occupazione_Forecast']
+            
             metrics = calculate_forecast_metrics(df_forecast, df_historical)
     except Exception as e:
         st.error("❌ Errore nella costruzione dei modelli predittivi")
@@ -435,7 +493,7 @@ def main():
     with tab1:
         st.header("Previsione ADR BED per Stagione 2026")
         
-        # Metriche principali
+        # Metriche principali - Prima riga
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -449,6 +507,39 @@ def main():
             st.metric(
                 "ADR Medio 2025",
                 f"€{metrics['ADR_Medio_2025']:.2f}"
+            )
+        
+        with col3:
+            st.metric(
+                "Room Nights Totali",
+                f"{metrics.get('Room_Nights_Totali', 0):,.0f}",
+                help="Totale room nights previsti per la stagione 2026"
+            )
+        
+        with col4:
+            st.metric(
+                "Occupazione Media",
+                f"{metrics.get('Occupazione_Media', 0):.1f}%",
+                help="Occupazione media prevista per la stagione 2026"
+            )
+        
+        # Metriche principali - Seconda riga
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            revenue_totale = df_forecast['Revenue_Forecast'].sum()
+            st.metric(
+                "Revenue Totale 2026",
+                f"€{revenue_totale:,.0f}",
+                help="Revenue totale previsto per la stagione 2026"
+            )
+        
+        with col2:
+            revpar_medio = df_forecast['RevPAR_Forecast'].mean()
+            st.metric(
+                "RevPAR Medio",
+                f"€{revpar_medio:.2f}",
+                help="Revenue Per Available Room medio"
             )
         
         with col3:
@@ -528,6 +619,96 @@ def main():
         
         st.plotly_chart(fig_forecast, use_container_width=True)
         
+        # Grafici Room Nights e Revenue
+        st.markdown("### 📊 Room Nights e Revenue 2026")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig_room_nights = go.Figure()
+            
+            fig_room_nights.add_trace(go.Scatter(
+                x=df_forecast['Data'],
+                y=df_forecast['Room_Nights_Forecast'],
+                mode='lines',
+                name='Room Nights',
+                line=dict(color='#3498db', width=2),
+                fill='tozeroy',
+                fillcolor='rgba(52, 152, 219, 0.2)'
+            ))
+            
+            fig_room_nights.update_layout(
+                title="Room Nights Giornalieri Previsti 2026",
+                xaxis_title="Data",
+                yaxis_title="Room Nights",
+                hovermode='x unified',
+                height=350,
+                template='plotly_white'
+            )
+            
+            st.plotly_chart(fig_room_nights, use_container_width=True)
+        
+        with col2:
+            fig_revenue = go.Figure()
+            
+            fig_revenue.add_trace(go.Scatter(
+                x=df_forecast['Data'],
+                y=df_forecast['Revenue_Forecast'],
+                mode='lines',
+                name='Revenue',
+                line=dict(color='#2ecc71', width=2),
+                fill='tozeroy',
+                fillcolor='rgba(46, 204, 113, 0.2)'
+            ))
+            
+            fig_revenue.update_layout(
+                title="Revenue Giornaliero Previsto 2026",
+                xaxis_title="Data",
+                yaxis_title="Revenue (€)",
+                hovermode='x unified',
+                height=350,
+                template='plotly_white'
+            )
+            
+            st.plotly_chart(fig_revenue, use_container_width=True)
+        
+        # Grafico Occupazione
+        st.markdown("### 📈 Occupazione Prevista 2026")
+        
+        fig_occupancy = go.Figure()
+        
+        fig_occupancy.add_trace(go.Scatter(
+            x=df_forecast['Data'],
+            y=df_forecast['Occupazione_Forecast'] * 100,
+            mode='lines',
+            name='Occupazione %',
+            line=dict(color='#9b59b6', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(155, 89, 182, 0.2)'
+        ))
+        
+        # Linea target occupazione
+        fig_occupancy.add_hline(
+            y=occupancy_base * 100,
+            line_dash="dash",
+            line_color="gray",
+            annotation_text=f"Target {occupancy_base*100:.0f}%",
+            annotation_position="right"
+        )
+        
+        fig_occupancy.update_layout(
+            title="Occupazione % Giornaliera con Stagionalità",
+            xaxis_title="Data",
+            yaxis_title="Occupazione %",
+            hovermode='x unified',
+            height=400,
+            template='plotly_white'
+        )
+        
+        st.plotly_chart(fig_occupancy, use_container_width=True)
+        
+        st.markdown("---")
+        
         # Mostra comparazione modelli se richiesto
         if show_models:
             st.markdown("### Confronto Modelli Predittivi")
@@ -583,10 +764,14 @@ def main():
         df_forecast['Mese_Num'] = df_forecast['Data'].dt.month
         monthly_forecast = df_forecast.groupby(['Mese_Num', 'Mese_Nome']).agg({
             'ADR_Bed_Forecast': ['mean', 'min', 'max', 'std'],
+            'Room_Nights_Forecast': 'sum',
+            'Revenue_Forecast': 'sum',
+            'Occupazione_Forecast': 'mean',
             'Data': 'count'
         }).reset_index()
         
-        monthly_forecast.columns = ['Mese_Num', 'Mese', 'ADR_Medio', 'ADR_Min', 'ADR_Max', 'ADR_StdDev', 'Giorni']
+        monthly_forecast.columns = ['Mese_Num', 'Mese', 'ADR_Medio', 'ADR_Min', 'ADR_Max', 'ADR_StdDev', 
+                                    'Room_Nights', 'Revenue', 'Occupazione', 'Giorni']
         
         # Calcola metriche mensili per dati storici
         df_historical['Mese_Num'] = df_historical['Data'].dt.month
@@ -613,10 +798,13 @@ def main():
         monthly_forecast['ADR_2025'] = monthly_forecast['ADR_2025'].round(2)
         monthly_forecast['ADR_2024'] = monthly_forecast['ADR_2024'].round(2)
         monthly_forecast['ADR_2023'] = monthly_forecast['ADR_2023'].round(2)
+        monthly_forecast['Room_Nights'] = monthly_forecast['Room_Nights'].round(0)
+        monthly_forecast['Revenue'] = monthly_forecast['Revenue'].round(0)
+        monthly_forecast['Occupazione'] = (monthly_forecast['Occupazione'] * 100).round(1)
         
         # Tabella con tutte le informazioni
-        display_df = monthly_forecast[['Mese', 'Giorni', 'ADR_Medio', 'ADR_Min', 'ADR_Max', 
-                                       'ADR_2025', 'ADR_2024', 'ADR_2023', 'Var_vs_2025_%']].copy()
+        display_df = monthly_forecast[['Mese', 'Giorni', 'ADR_Medio', 'Room_Nights', 'Occupazione', 'Revenue',
+                                       'ADR_2025', 'Var_vs_2025_%']].copy()
         
         # Formatta e colora le celle basandosi sulla variazione
         def color_variation(val):
@@ -633,11 +821,10 @@ def main():
         
         styled_df = display_df.style.format({
             'ADR_Medio': '€{:.2f}',
-            'ADR_Min': '€{:.2f}',
-            'ADR_Max': '€{:.2f}',
+            'Room_Nights': '{:,.0f}',
+            'Occupazione': '{:.1f}%',
+            'Revenue': '€{:,.0f}',
             'ADR_2025': '€{:.2f}',
-            'ADR_2024': '€{:.2f}',
-            'ADR_2023': '€{:.2f}',
             'Var_vs_2025_%': '{:+.2f}%'
         }).applymap(color_variation, subset=['Var_vs_2025_%'])
         
