@@ -630,27 +630,117 @@ def main():
     # File Upload Section
     st.sidebar.header("📁 Caricamento Dati")
     
-    with st.sidebar.expander("Carica File Storici", expanded=True):
-        uploaded_file_2023 = st.file_uploader(
-            "Dati Stagione 2023 (Excel)",
-            type=['xlsx', 'xls'],
-            key='file_2023',
-            help="Carica il file Excel con i dati della stagione 2023"
-        )
+    # Prova a caricare i file storici da GitHub
+    try:
+        with st.spinner('Caricamento dati storici da GitHub...'):
+            df_historical = load_historical_data('data_2023.xlsx', 'data_2024.xlsx', 'data_2025.xlsx')
         
-        uploaded_file_2024 = st.file_uploader(
-            "Dati Stagione 2024 (Excel)",
-            type=['xlsx', 'xls'],
-            key='file_2024',
-            help="Carica il file Excel con i dati della stagione 2024"
-        )
+        st.sidebar.success(f"✅ Dati storici caricati: {len(df_historical)} giorni")
         
-        uploaded_file_2025 = st.file_uploader(
-            "Dati Stagione 2025 (Excel)",
-            type=['xlsx', 'xls'],
-            key='file_2025',
-            help="Carica il file Excel con i dati della stagione 2025"
-        )
+        # Mostra info di debug
+        with st.sidebar.expander("🔍 Info Dataset", expanded=False):
+            st.write(f"**Anni presenti:** {sorted(df_historical['Anno'].unique())}")
+            st.write(f"**Periodo:** {df_historical['Data'].min().strftime('%d/%m/%Y')} - {df_historical['Data'].max().strftime('%d/%m/%Y')}")
+            st.write(f"**ADR medio:** €{df_historical['ADR Bed'].mean():.2f}")
+            st.write(f"**Colonne disponibili:** {len(df_historical.columns)}")
+        
+        files_loaded_from_github = True
+    
+    except Exception as e:
+        files_loaded_from_github = False
+        st.sidebar.warning("⚠️ File storici non trovati su GitHub")
+        
+        with st.sidebar.expander("Carica File Storici Manualmente", expanded=True):
+            st.info("I file data_2023.xlsx, data_2024.xlsx, data_2025.xlsx non sono presenti su GitHub. Caricali manualmente.")
+            
+            uploaded_file_2023 = st.file_uploader(
+                "Dati Stagione 2023 (Excel)",
+                type=['xlsx', 'xls'],
+                key='file_2023',
+                help="Carica il file Excel con i dati della stagione 2023"
+            )
+            
+            uploaded_file_2024 = st.file_uploader(
+                "Dati Stagione 2024 (Excel)",
+                type=['xlsx', 'xls'],
+                key='file_2024',
+                help="Carica il file Excel con i dati della stagione 2024"
+            )
+            
+            uploaded_file_2025 = st.file_uploader(
+                "Dati Stagione 2025 (Excel)",
+                type=['xlsx', 'xls'],
+                key='file_2025',
+                help="Carica il file Excel con i dati della stagione 2025"
+            )
+            
+            # Verifica che tutti i file siano stati caricati
+            if not all([uploaded_file_2023, uploaded_file_2024, uploaded_file_2025]):
+                st.warning("⚠️ Carica tutti e tre i file Excel (stagioni 2023, 2024, 2025) per procedere.")
+                
+                st.info("""
+                ### 📋 Formato Richiesto
+                
+                I file Excel devono contenere le seguenti colonne:
+                - `Giorno` (formato: "Dom 28/05/2023")
+                - `% Occ.` (occupazione percentuale)
+                - `Room nights`
+                - `Bed nights`
+                - `ADR Bed` (Average Daily Rate per posto letto)
+                - `RevPar`
+                
+                ### 📊 Segmenti di Analisi
+                Focus su segmenti diretti:
+                - SITO WEB
+                - WEB PORTALI (OTA)
+                - DIRETTI INDIVIDUALI
+                """)
+                
+                st.stop()
+            
+            # Carica dati dai file uploadati manualmente
+            try:
+                with st.spinner('Caricamento e analisi dati storici...'):
+                    df_historical = load_historical_data(uploaded_file_2023, uploaded_file_2024, uploaded_file_2025)
+                
+                st.sidebar.success(f"✅ Dati caricati: {len(df_historical)} giorni")
+                
+                # Mostra info di debug
+                with st.sidebar.expander("🔍 Info Dataset", expanded=False):
+                    st.write(f"**Anni presenti:** {sorted(df_historical['Anno'].unique())}")
+                    st.write(f"**Periodo:** {df_historical['Data'].min().strftime('%d/%m/%Y')} - {df_historical['Data'].max().strftime('%d/%m/%Y')}")
+                    st.write(f"**ADR medio:** €{df_historical['ADR Bed'].mean():.2f}")
+                    st.write(f"**Colonne disponibili:** {len(df_historical.columns)}")
+            
+            except Exception as e:
+                st.error(f"❌ Errore nel caricamento dei dati")
+                
+                with st.expander("📋 Dettagli Errore (per debug)", expanded=True):
+                    st.code(str(e))
+                    
+                    # Prova a dare più informazioni
+                    try:
+                        st.write("**Tentativo di lettura file 2023:**")
+                        df_test = pd.read_excel(uploaded_file_2023)
+                        st.write(f"- Righe: {len(df_test)}")
+                        st.write(f"- Colonne: {list(df_test.columns)}")
+                        st.dataframe(df_test.head(3))
+                    except Exception as e2:
+                        st.error(f"Errore lettura file 2023: {str(e2)}")
+                
+                st.info("""
+                ### 📋 Verifica questi punti:
+                
+                1. **Formato File**: I file devono essere Excel (.xlsx o .xls)
+                2. **Colonne Richieste**: 
+                   - `Giorno` (formato: "Dom 28/05/2023")
+                   - `ADR Bed` (numero decimale)
+                   - `% Occ.`, `Room nights`, `Bed nights`, `RevPar`
+                3. **Dati Validi**: Almeno 30 giorni con ADR Bed > 0
+                4. **Encoding**: Assicurati che i file non siano corrotti
+                """)
+                
+                st.stop()
     
     # NUOVO: Upload Snapshot 2026 OTB
     st.sidebar.markdown("---")
@@ -763,50 +853,6 @@ def main():
         
         Se hai anche lo snapshot 2025 **esattamente alla stessa data dell'anno scorso**, 
         caricalo per un confronto perfetto allo stesso booking window!
-        """)
-        
-        st.stop()
-    
-    # Carica dati
-    try:
-        with st.spinner('Caricamento e analisi dati storici...'):
-            df_historical = load_historical_data(uploaded_file_2023, uploaded_file_2024, uploaded_file_2025)
-        
-        st.sidebar.success(f"✅ Dati caricati: {len(df_historical)} giorni")
-        
-        # Mostra info di debug
-        with st.sidebar.expander("🔍 Info Dataset", expanded=False):
-            st.write(f"**Anni presenti:** {sorted(df_historical['Anno'].unique())}")
-            st.write(f"**Periodo:** {df_historical['Data'].min().strftime('%d/%m/%Y')} - {df_historical['Data'].max().strftime('%d/%m/%Y')}")
-            st.write(f"**ADR medio:** €{df_historical['ADR Bed'].mean():.2f}")
-            st.write(f"**Colonne disponibili:** {len(df_historical.columns)}")
-    
-    except Exception as e:
-        st.error(f"❌ Errore nel caricamento dei dati")
-        
-        with st.expander("📋 Dettagli Errore (per debug)", expanded=True):
-            st.code(str(e))
-            
-            # Prova a dare più informazioni
-            try:
-                st.write("**Tentativo di lettura file 2023:**")
-                df_test = pd.read_excel(uploaded_file_2023)
-                st.write(f"- Righe: {len(df_test)}")
-                st.write(f"- Colonne: {list(df_test.columns)}")
-                st.dataframe(df_test.head(3))
-            except Exception as e2:
-                st.error(f"Errore lettura file 2023: {str(e2)}")
-        
-        st.info("""
-        ### 📋 Verifica questi punti:
-        
-        1. **Formato File**: I file devono essere Excel (.xlsx o .xls)
-        2. **Colonne Richieste**: 
-           - `Giorno` (formato: "Dom 28/05/2023")
-           - `ADR Bed` (numero decimale)
-           - `% Occ.`, `Room nights`, `Bed nights`, `RevPar`
-        3. **Dati Validi**: Almeno 30 giorni con ADR Bed > 0
-        4. **Encoding**: Assicurati che i file non siano corrotti
         """)
         
         st.stop()
