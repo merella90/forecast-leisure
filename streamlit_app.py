@@ -772,7 +772,7 @@ def main():
     )
     
     # Variabile per snapshot 2025 comparabile (opzionale ma consigliata)
-    uploaded_snapshot_2025_comparable = None
+    # NON inizializzare a None qui, altrimenti cancella il file uploader!
     snapshot_2026_date = None
     
     # Se snapshot 2026 è caricato, analizza la data
@@ -807,6 +807,11 @@ def main():
                 key='snapshot_2025_comparable',
                 help="Se disponibile, permette confronto esatto allo stesso booking window"
             )
+            
+            # Salva in session_state per persistenza
+            if uploaded_snapshot_2025_comparable:
+                st.session_state['uploaded_snapshot_2025_comparable'] = uploaded_snapshot_2025_comparable
+                st.session_state['snapshot_2026_date'] = snapshot_2026_date
             
             if uploaded_snapshot_2025_comparable:
                 st.sidebar.success("✅ Confronto perfetto attivato!")
@@ -938,12 +943,16 @@ def main():
         with st.spinner('Caricamento snapshot OTB...'):
             df_snapshots_2025 = load_snapshots_2025()
             
+            # Recupera snapshot comparabile da session_state se disponibile
+            uploaded_snapshot_2025_comparable = st.session_state.get('uploaded_snapshot_2025_comparable', None)
+            snapshot_2026_date_from_state = st.session_state.get('snapshot_2026_date', snapshot_2026_date)
+            
             # Se disponibile, usa snapshot 2025 comparabile caricato dall'utente
             if uploaded_snapshot_2025_comparable:
                 df_snapshot_2025_user = load_snapshot_2026(uploaded_snapshot_2025_comparable)  # Riusa la stessa funzione
                 if df_snapshot_2025_user is not None:
-                    # Calcola data target
-                    target_date = snapshot_2026_date.replace(year=2024)
+                    # Calcola data target (usa quella salvata in session_state)
+                    target_date = snapshot_2026_date_from_state.replace(year=2024)
                     
                     # DEBUG: Mostra info
                     st.sidebar.write(f"🔍 DEBUG: Target date = {target_date.strftime('%d/%m/%Y')}")
