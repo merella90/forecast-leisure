@@ -74,27 +74,48 @@ def load_snapshot_2026(uploaded_file):
     try:
         df = pd.read_excel(uploaded_file)
         
-        # Parse dates
-        def parse_date(date_str):
-            try:
-                date_only = date_str.split(' ', 1)[-1] if isinstance(date_str, str) else date_str
-                return pd.to_datetime(date_only, format='%d/%m/%Y', errors='coerce')
-            except:
-                return pd.NaT
+        # Determina quale formato di file è
+        if 'Data' in df.columns and df['Data'].dtype != 'object':
+            # FORMATO 1: Colonna 'Data' già in datetime
+            df['Data'] = pd.to_datetime(df['Data'])
+            
+        elif 'Data' in df.columns and df['Data'].dtype == 'object':
+            # FORMATO 1b: Colonna 'Data' come stringa da parsare
+            df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
+            
+        elif 'Giorno' in df.columns:
+            # FORMATO 2: Colonna 'Giorno' in formato "Dom 28/05/2025"
+            def parse_date(date_str):
+                try:
+                    date_only = date_str.split(' ', 1)[-1] if isinstance(date_str, str) else date_str
+                    return pd.to_datetime(date_only, format='%d/%m/%Y', errors='coerce')
+                except:
+                    return pd.NaT
+            
+            df['Data'] = df['Giorno'].apply(parse_date)
+        else:
+            st.error("❌ File non riconosciuto: manca colonna 'Data' o 'Giorno'")
+            return None
         
-        df['Data'] = df['Giorno'].apply(parse_date)
+        # Filtra righe valide
         df = df.dropna(subset=['Data'])
         df = df[df['ADR Bed'] > 0].copy()
         
         if len(df) > 0:
+            # Usa la data minima come snapshot date (inizio stagione)
             df['Snapshot_Date'] = pd.to_datetime('today')
             df['Snapshot_Label'] = pd.to_datetime('today').strftime('%b %Y')
+            
+            st.sidebar.write(f"✅ Snapshot caricata: {len(df)} giorni, {df['Room nights'].sum():.0f} RN, ADR €{df['ADR Bed'].mean():.2f}")
+            
             return df
         else:
             return None
     
     except Exception as e:
         st.error(f"Errore nel caricamento dello snapshot 2026: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
         return None
 
 def calculate_booking_window(snapshot_date, stay_date):
