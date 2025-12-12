@@ -266,6 +266,71 @@ def generate_rm_suggestions(comparison, monthly_gap, pickup_forecast):
     
     return suggestions
 
+def create_hybrid_forecast(df_forecast_ml, df_snapshot_2026, df_snapshots_2025, df_historical):
+    """
+    Crea forecast ibrido che combina:
+    1. Dati OTB 2026 reali (dove disponibili)
+    2. Forecast ML aggiustato con pickup rate reale
+    3. Correzione ADR basata su trend reale
+    """
+    
+    # Copia il forecast ML di base
+    df_hybrid = df_forecast_ml.copy()
+    
+    # Parse dates dello snapshot 2026
+    df_otb_2026 = df_snapshot_2026.copy()
+    
+    # Identifica date con OTB reale
+    date_otb = set(df_otb_2026['Data'].dt.date)
+    
+    # Per le date con OTB reale, usa i dati reali
+    for idx, row in df_hybrid.iterrows():
+        date_forecast = row['Data'].date()
+        
+        if date_forecast in date_otb:
+            # Trova il record OTB corrispondente
+            otb_row = df_otb_2026[df_otb_2026['Data'].dt.date == date_forecast]
+            
+            if len(otb_row) > 0:
+                otb_row = otb_row.iloc[0]
+                
+                # Usa ADR reale se disponibile e ragionevole
+                if pd.notna(otb_row['ADR Bed']) and otb_row['ADR Bed'] > 0:
+                    df_hybrid.at[idx, 'ADR_Bed_Forecast'] = otb_row['ADR Bed']
+                    df_hybrid.at[idx, 'Source'] = 'OTB_Real'
+                
+                # Usa Room Nights reali se disponibili
+                if 'Room nights' in otb_row and pd.notna(otb_row['Room nights']):
+                    df_hybrid.at[idx, 'Room_Nights_Real'] = otb_row['Room nights']
+    
+    # Calcola fattore di aggiustamento ADR basato su trend reale
+    adr_otb_mean = df_otb_2026['ADR Bed'].mean()
+    adr_forecast_comparable = df_hybrid[df_hybrid['Data'].isin(df_otb_2026['Data'])]['ADR_Bed_Forecast'].mean()
+    
+    if adr_forecast_comparable > 0:
+        adr_adjustment_factor = adr_otb_mean / adr_forecast_comparable
+    else:
+        adr_adjustment_factor = 1.0
+    
+    # Applica aggiustamento alle date senza OTB (solo se fattore è ragionevole)
+    if 0.8 <= adr_adjustment_factor <= 1.2:
+        mask_no_otb = ~df_hybrid['Data'].dt.date.isin(date_otb)
+        df_hybrid.loc[mask_no_otb, 'ADR_Bed_Forecast'] *= adr_adjustment_factor
+        df_hybrid.loc[mask_no_otb, 'Source'] = 'ML_Adjusted'
+    
+    # Aggiungi flag per identificare source
+    df_hybrid['Source'] = df_hybrid.get('Source', 'ML_Original')
+    
+    # Ricalcola metriche derivate
+    if 'Occupazione_Forecast' in df_hybrid.columns:
+        df_hybrid['Revenue_Forecast'] = (
+            df_hybrid['Room_Nights_Forecast'] * 
+            df_hybrid['ADR_Bed_Forecast'] * 
+            df_hybrid.get('Room_Nights_Real', 1.0).fillna(1.0)
+        )
+    
+    return df_hybrid, adr_adjustment_factor
+
 # ===============================
 # ORIGINAL FUNCTIONS
 # ===============================
@@ -570,6 +635,17 @@ def main():
             help="Carica il file Excel con i dati della stagione 2025"
         )
     
+    # NUOVO: Upload Snapshot 2026 OTB
+    st.sidebar.markdown("---")
+    st.sidebar.header("📊 Snapshot OTB 2026")
+    
+    uploaded_snapshot_2026 = st.sidebar.file_uploader(
+        "**Snapshot OTB 2026 Corrente** (Obbligatorio)",
+        type=['xlsx', 'xls'],
+        key='sidebar_snapshot_2026',
+        help="Snapshot OTB attuale per stagione 2026 - NECESSARIO per forecast accurato"
+    )
+    
     # Verifica che tutti i file siano stati caricati
     if not all([uploaded_file_2023, uploaded_file_2024, uploaded_file_2025]):
         st.warning("⚠️ Carica tutti e tre i file Excel (stagioni 2023, 2024, 2025) per procedere con il forecasting.")
@@ -590,6 +666,36 @@ def main():
         - SITO WEB
         - WEB PORTALI (OTA)
         - DIRETTI INDIVIDUALI
+        """)
+        
+        st.stop()
+    
+    # NUOVO: Verifica snapshot 2026
+    if not uploaded_snapshot_2026:
+        st.error("🔴 **SNAPSHOT OTB 2026 OBBLIGATORIA**")
+        
+        st.warning("""
+        ### 📊 Snapshot OTB 2026 Mancante
+        
+        Per un forecasting accurato è **NECESSARIO** caricare lo snapshot OTB 2026 corrente.
+        
+        **Perché è obbligatorio?**
+        - ✅ Aggiorna il forecast con dati reali di prenotazione
+        - ✅ Calcola gap vs anno precedente
+        - ✅ Genera suggerimenti Revenue Management
+        - ✅ Corregge il modello ML con pickup reale
+        
+        **Caricalo nella sidebar** → "Snapshot OTB 2026 Corrente"
+        """)
+        
+        st.info("""
+        ### 🎯 Cosa Ottieni con lo Snapshot 2026
+        
+        1. **Forecast Ibrido**: Combina modello ML + dati reali OTB
+        2. **Booking Curve Analysis**: Confronto dettagliato 2025 vs 2026
+        3. **Gap Analysis**: Room Nights, ADR, Revenue per mese
+        4. **RM Suggestions**: Alert e azioni consigliate automatiche
+        5. **Pickup Forecast**: Previsione basata su pickup reale
         """)
         
         st.stop()
@@ -712,7 +818,25 @@ def main():
         with st.spinner('Costruzione modelli predittivi...'):
             seasonality = calculate_seasonality_index(df_historical)
             models = build_forecast_models(df_historical)
-            df_forecast = generate_forecast_2026(df_historical, models, seasonality, scenario)
+            df_forecast_base = generate_forecast_2026(df_historical, models, seasonality, scenario)
+        
+        # Carica snapshot 2025 e 2026 per forecast ibrido
+        with st.spinner('Caricamento snapshot OTB...'):
+            df_snapshots_2025 = load_snapshots_2025()
+            df_snapshot_2026 = load_snapshot_2026(uploaded_snapshot_2026)
+        
+        if df_snapshot_2026 is None:
+            st.error("❌ Errore nel caricamento dello snapshot 2026")
+            st.stop()
+        
+        # Crea forecast ibrido (ML + OTB reale)
+        with st.spinner('Creazione forecast ibrido con dati OTB reali...'):
+            df_forecast, adr_adjustment = create_hybrid_forecast(
+                df_forecast_base, 
+                df_snapshot_2026, 
+                df_snapshots_2025,
+                df_historical
+            )
             
             # Aggiungi forecast Room Nights e Occupazione
             # Calcola occupazione con stagionalità
@@ -733,6 +857,20 @@ def main():
             df_forecast['RevPAR_Forecast'] = df_forecast['ADR_Bed_Forecast'] * df_forecast['Occupazione_Forecast']
             
             metrics = calculate_forecast_metrics(df_forecast, df_historical)
+        
+        # Info forecast ibrido
+        st.sidebar.success("✅ Forecast Ibrido Creato")
+        
+        with st.sidebar.expander("ℹ️ Info Forecast", expanded=False):
+            otb_days = (df_forecast['Source'] == 'OTB_Real').sum()
+            adjusted_days = (df_forecast['Source'] == 'ML_Adjusted').sum()
+            ml_days = (df_forecast['Source'] == 'ML_Original').sum()
+            
+            st.write(f"**Giorni OTB Reale:** {otb_days}")
+            st.write(f"**Giorni ML Aggiustato:** {adjusted_days}")
+            st.write(f"**Giorni ML Base:** {ml_days}")
+            st.write(f"**Fattore Aggiustamento ADR:** {adr_adjustment:.2%}")
+        
     except Exception as e:
         st.error("❌ Errore nella costruzione dei modelli predittivi")
         
@@ -752,6 +890,19 @@ def main():
     # =============================
     with tab1:
         st.header("Previsione ADR BED per Stagione 2026")
+        
+        # Badge Forecast Ibrido
+        otb_days = (df_forecast['Source'] == 'OTB_Real').sum()
+        
+        col_badge1, col_badge2, col_badge3 = st.columns([1, 1, 2])
+        with col_badge1:
+            st.info(f"🎯 **Forecast Ibrido**")
+        with col_badge2:
+            st.success(f"✅ {otb_days} giorni OTB reali integrati")
+        with col_badge3:
+            st.write(f"_Fattore aggiustamento ADR: {adr_adjustment:.1%}_")
+        
+        st.markdown("---")
         
         # Metriche principali - Prima riga
         col1, col2, col3, col4 = st.columns(4)
@@ -1633,49 +1784,7 @@ def main():
     with tab5:
         st.header("📊 Booking Curve Analysis & Revenue Management")
         
-        # Upload snapshot 2026
-        st.markdown("### 📤 Carica OTB 2026 Corrente")
-        
-        uploaded_snapshot_2026 = st.file_uploader(
-            "Carica snapshot OTB attuale per stagione 2026",
-            type=['xlsx', 'xls'],
-            key='snapshot_2026',
-            help="File Excel con formato identico agli storici (Giorno, Room nights, ADR Bed, etc.)"
-        )
-        
-        if uploaded_snapshot_2026 is None:
-            st.info("""
-            ### 📋 Come Funziona
-            
-            1. **Carica lo snapshot OTB 2026** attuale usando il pulsante sopra
-            2. Il sistema confronta automaticamente con le **12 snapshot storiche 2025** (già caricate da GitHub)
-            3. Ricevi **analisi dettagliata del gap** (Room Nights, ADR, Revenue)
-            4. Ottieni **suggerimenti di Revenue Management** personalizzati
-            
-            #### 📊 Cosa Vedrai:
-            - Booking Curve 2025 vs 2026
-            - Gap Analysis per mese
-            - Pickup Rate Forecast
-            - Alert e Azioni Consigliate
-            """)
-            st.stop()
-        
-        # Carica snapshot 2025 da GitHub
-        with st.spinner('Caricamento snapshot storiche 2025...'):
-            df_snapshots_2025 = load_snapshots_2025()
-        
-        if df_snapshots_2025 is None:
-            st.error("❌ Impossibile caricare le snapshot storiche 2025 da GitHub")
-            st.stop()
-        
-        # Carica snapshot 2026
-        with st.spinner('Analisi snapshot 2026...'):
-            df_snapshot_2026 = load_snapshot_2026(uploaded_snapshot_2026)
-        
-        if df_snapshot_2026 is None:
-            st.error("❌ Errore nel caricamento dello snapshot 2026")
-            st.stop()
-        
+        # Le snapshot sono già caricate (2025 da GitHub, 2026 da sidebar)
         st.success(f"✅ Snapshot caricate: 12 storiche 2025 + 1 attuale 2026")
         
         st.markdown("---")
