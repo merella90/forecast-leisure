@@ -486,8 +486,26 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 @st.cache_data
+def load_altri_segmenti():
+    """Carica i dati degli altri segmenti (non Diretti) da GitHub"""
+    
+    try:
+        df_2023 = pd.read_excel('altrisegmenti/altrisegmenti_2023.xlsx')
+        df_2024 = pd.read_excel('altrisegmenti/altrisegmenti_2024.xlsx')
+        df_2025 = pd.read_excel('altrisegmenti/altrisegmenti_2025.xlsx')
+        
+        return {
+            2023: df_2023,
+            2024: df_2024,
+            2025: df_2025
+        }
+    except Exception as e:
+        st.warning(f"⚠️ File altri segmenti non trovati su GitHub: {str(e)}")
+        return None
+
+@st.cache_data
 def load_historical_data(file_2023, file_2024, file_2025):
-    """Carica e processa i dati storici dalle tre stagioni"""
+    """Carica e processa i dati storici dalle tre stagioni (SEGMENTI DIRETTI)"""
     
     try:
         # Carica i tre file
@@ -559,6 +577,48 @@ def load_historical_data(file_2023, file_2024, file_2025):
         
     except Exception as e:
         raise Exception(f"Errore nel caricamento dei dati: {str(e)}")
+
+def calculate_segment_weight(df_historical, df_altri_segmenti):
+    """
+    Calcola automaticamente il peso dei segmenti diretti sul totale hotel
+    basandosi sui dati storici 2023-2025
+    
+    Returns:
+        peso_diretti: percentuale media (0.0-1.0) dei segmenti diretti
+        breakdown: dizionario con dettagli per anno
+    """
+    
+    if df_altri_segmenti is None:
+        # Fallback: usa peso empirico medio
+        st.sidebar.warning("⚠️ Dati altri segmenti non disponibili, uso peso stimato 22.5%")
+        return 0.225, None
+    
+    breakdown = {}
+    
+    for year in [2023, 2024, 2025]:
+        # Room Nights DIRETTI (SITO WEB, OTA, DIRETTI INDIVIDUALI)
+        df_diretti_year = df_historical[df_historical['Anno'] == year]
+        rn_diretti = df_diretti_year['Room nights'].sum() if 'Room nights' in df_diretti_year.columns else 0
+        
+        # Room Nights ALTRI SEGMENTI (GRUPPI, MICE, ESTERO, etc.)
+        df_altri_year = df_altri_segmenti[year]
+        rn_altri = df_altri_year['Room nights'].sum() if 'Room nights' in df_altri_year.columns else 0
+        
+        # Totale hotel
+        rn_totale = rn_diretti + rn_altri
+        peso_year = (rn_diretti / rn_totale) if rn_totale > 0 else 0
+        
+        breakdown[year] = {
+            'rn_diretti': rn_diretti,
+            'rn_altri': rn_altri,
+            'rn_totale': rn_totale,
+            'peso_diretti': peso_year
+        }
+    
+    # Calcola peso medio triennale
+    peso_medio = sum([breakdown[y]['peso_diretti'] for y in [2023, 2024, 2025]]) / 3
+    
+    return peso_medio, breakdown
 
 def calculate_seasonality_index(df):
     """Calcola l'indice di stagionalità per settimana"""
@@ -774,12 +834,26 @@ def main():
         
         st.sidebar.success(f"✅ Dati storici caricati: {len(df_historical)} giorni")
         
+        # NUOVO: Carica dati altri segmenti
+        with st.spinner('Caricamento dati altri segmenti...'):
+            df_altri_segmenti = load_altri_segmenti()
+        
+        # Calcola peso segmenti diretti automaticamente
+        peso_diretti, breakdown_segmenti = calculate_segment_weight(df_historical, df_altri_segmenti)
+        
         # Mostra info di debug
         with st.sidebar.expander("🔍 Info Dataset", expanded=False):
             st.write(f"**Anni presenti:** {sorted(df_historical['Anno'].unique())}")
             st.write(f"**Periodo:** {df_historical['Data'].min().strftime('%d/%m/%Y')} - {df_historical['Data'].max().strftime('%d/%m/%Y')}")
             st.write(f"**ADR medio:** €{df_historical['ADR Bed'].mean():.2f}")
             st.write(f"**Colonne disponibili:** {len(df_historical.columns)}")
+            
+            # NUOVO: Info breakdown segmenti
+            if breakdown_segmenti:
+                st.markdown("---")
+                st.markdown("**📊 Breakdown Segmenti:**")
+                for year, data in breakdown_segmenti.items():
+                    st.write(f"{year}: Diretti {data['peso_diretti']*100:.1f}% ({data['rn_diretti']:,.0f} RN)")
         
         files_loaded_from_github = True
     
@@ -842,12 +916,23 @@ def main():
                 
                 st.sidebar.success(f"✅ Dati caricati: {len(df_historical)} giorni")
                 
+                # Tenta di caricare altri segmenti da GitHub anche se i dati diretti sono manuali
+                df_altri_segmenti = load_altri_segmenti()
+                peso_diretti, breakdown_segmenti = calculate_segment_weight(df_historical, df_altri_segmenti)
+                
                 # Mostra info di debug
                 with st.sidebar.expander("🔍 Info Dataset", expanded=False):
                     st.write(f"**Anni presenti:** {sorted(df_historical['Anno'].unique())}")
                     st.write(f"**Periodo:** {df_historical['Data'].min().strftime('%d/%m/%Y')} - {df_historical['Data'].max().strftime('%d/%m/%Y')}")
                     st.write(f"**ADR medio:** €{df_historical['ADR Bed'].mean():.2f}")
                     st.write(f"**Colonne disponibili:** {len(df_historical.columns)}")
+                    
+                    # Info breakdown segmenti
+                    if breakdown_segmenti:
+                        st.markdown("---")
+                        st.markdown("**📊 Breakdown Segmenti:**")
+                        for year, data in breakdown_segmenti.items():
+                            st.write(f"{year}: Diretti {data['peso_diretti']*100:.1f}% ({data['rn_diretti']:,.0f} RN)")
             
             except Exception as e:
                 st.error(f"❌ Errore nel caricamento dei dati")
@@ -998,17 +1083,60 @@ def main():
     
     st.sidebar.markdown("---")
     
-    # Configurazione Room Nights
+    # Configurazione Room Nights con breakdown segmenti
     st.sidebar.markdown("### 🏨 Configurazione Struttura")
     
-    camere_totali = st.sidebar.number_input(
-        "Numero Camere Totali",
-        min_value=100,
-        max_value=500,
-        value=308,
-        step=1,
-        help="Numero totale di camere dell'hotel"
+    camere_totali_hotel = 308  # Fisse
+    st.sidebar.metric("Camere Totali Hotel", f"{camere_totali_hotel}")
+    
+    # Mostra breakdown segmenti
+    st.sidebar.markdown("#### 📊 Distribuzione Storica")
+    
+    if breakdown_segmenti:
+        st.sidebar.write(f"**Segmenti Diretti:** {peso_diretti*100:.1f}%")
+        st.sidebar.caption("_(SITO WEB, OTA, DIRETTI IND.)_")
+        st.sidebar.write(f"**Altri Segmenti:** {(1-peso_diretti)*100:.1f}%")
+        st.sidebar.caption("_(GRUPPI, MICE, ESTERO, etc.)_")
+        
+        # Dettaglio per anno
+        with st.sidebar.expander("📈 Dettaglio per Anno", expanded=False):
+            for year in [2023, 2024, 2025]:
+                data = breakdown_segmenti[year]
+                st.write(f"**{year}:**")
+                st.write(f"  • Diretti: {data['rn_diretti']:,.0f} RN ({data['peso_diretti']*100:.1f}%)")
+                st.write(f"  • Altri: {data['rn_altri']:,.0f} RN")
+                st.write(f"  • Totale: {data['rn_totale']:,.0f} RN")
+    
+    # Calcola camere efficaci per segmenti diretti
+    camere_diretti_calcolate = int(camere_totali_hotel * peso_diretti)
+    
+    st.sidebar.markdown("#### 🎯 Camere Efficaci Segmenti Diretti")
+    
+    # Opzione override manuale
+    use_override = st.sidebar.checkbox(
+        "⚙️ Override manuale camere", 
+        value=False,
+        help="Usa un valore personalizzato invece del calcolo automatico"
     )
+    
+    if use_override:
+        camere_totali = st.sidebar.number_input(
+            "Camere Diretti (manuale)",
+            min_value=10,
+            max_value=308,
+            value=camere_diretti_calcolate,
+            step=1,
+            help="Imposta manualmente le camere per i segmenti diretti"
+        )
+        st.sidebar.warning("⚠️ Stai usando un valore manuale!")
+    else:
+        camere_totali = camere_diretti_calcolate
+        st.sidebar.metric(
+            "Camere Diretti (auto)", 
+            f"{camere_totali}",
+            help=f"Calcolate automaticamente: {camere_totali_hotel} × {peso_diretti*100:.1f}%"
+        )
+        st.sidebar.success(f"✅ Calcolate da storico 2023-2025")
     
     st.sidebar.markdown("### 📊 Occupazione Forecast")
     
