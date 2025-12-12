@@ -1757,6 +1757,12 @@ def main():
         
         fig_variations = go.Figure()
         
+        # Calcola variazioni se non presenti in monthly_plot
+        if 'Var_vs_2025_%' not in monthly_plot.columns:
+            monthly_plot['Var_vs_2025_%'] = (
+                (monthly_plot['ADR_Medio'] - monthly_plot['ADR_2025']) / monthly_plot['ADR_2025'] * 100
+            ).round(2)
+        
         colors = ['#e74c3c' if x >= 0 else '#3498db' for x in monthly_plot['Var_vs_2025_%']]
         
         fig_variations.add_trace(go.Bar(
