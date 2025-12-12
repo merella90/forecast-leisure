@@ -11,6 +11,265 @@ import warnings
 import io
 warnings.filterwarnings('ignore')
 
+# ===============================
+# BOOKING CURVE FUNCTIONS
+# ===============================
+
+@st.cache_data
+def load_snapshots_2025():
+    """Carica tutte le snapshot storiche 2025 da GitHub"""
+    
+    snapshots = []
+    snapshot_dates = [
+        ('snapshot_01_nov_2024.xlsx', '2024-11-01'),
+        ('snapshot_02_dic_2024.xlsx', '2024-12-01'),
+        ('snapshot_03_gen_2025.xlsx', '2025-01-01'),
+        ('snapshot_04_feb_2025.xlsx', '2025-02-01'),
+        ('snapshot_05_mar_2025.xlsx', '2025-03-01'),
+        ('snapshot_06_apr_2025.xlsx', '2025-04-01'),
+        ('snapshot_07_mag_2025.xlsx', '2025-05-01'),
+        ('snapshot_08_giu_2025.xlsx', '2025-06-01'),
+        ('snapshot_09_lug_2025.xlsx', '2025-07-01'),
+        ('snapshot_10_ago_2025.xlsx', '2025-08-01'),
+        ('snapshot_11_set_2025.xlsx', '2025-09-01'),
+        ('snapshot_12_finale_2025.xlsx', '2025-10-01'),
+    ]
+    
+    base_path = 'data/snapshots_2025/'
+    
+    for filename, snapshot_date in snapshot_dates:
+        try:
+            filepath = base_path + filename
+            df = pd.read_excel(filepath)
+            
+            # Parse dates
+            def parse_date(date_str):
+                try:
+                    date_only = date_str.split(' ', 1)[-1] if isinstance(date_str, str) else date_str
+                    return pd.to_datetime(date_only, format='%d/%m/%Y', errors='coerce')
+                except:
+                    return pd.NaT
+            
+            df['Data'] = df['Giorno'].apply(parse_date)
+            df = df.dropna(subset=['Data'])
+            df = df[df['ADR Bed'] > 0].copy()
+            
+            if len(df) > 0:
+                df['Snapshot_Date'] = pd.to_datetime(snapshot_date)
+                df['Snapshot_Label'] = pd.to_datetime(snapshot_date).strftime('%b %Y')
+                snapshots.append(df)
+        
+        except Exception as e:
+            st.warning(f"Impossibile caricare {filename}: {str(e)}")
+            continue
+    
+    if len(snapshots) > 0:
+        return pd.concat(snapshots, ignore_index=True)
+    else:
+        return None
+
+def load_snapshot_2026(uploaded_file):
+    """Carica e processa lo snapshot OTB 2026 corrente"""
+    
+    try:
+        df = pd.read_excel(uploaded_file)
+        
+        # Parse dates
+        def parse_date(date_str):
+            try:
+                date_only = date_str.split(' ', 1)[-1] if isinstance(date_str, str) else date_str
+                return pd.to_datetime(date_only, format='%d/%m/%Y', errors='coerce')
+            except:
+                return pd.NaT
+        
+        df['Data'] = df['Giorno'].apply(parse_date)
+        df = df.dropna(subset=['Data'])
+        df = df[df['ADR Bed'] > 0].copy()
+        
+        if len(df) > 0:
+            df['Snapshot_Date'] = pd.to_datetime('today')
+            df['Snapshot_Label'] = pd.to_datetime('today').strftime('%b %Y')
+            return df
+        else:
+            return None
+    
+    except Exception as e:
+        st.error(f"Errore nel caricamento dello snapshot 2026: {str(e)}")
+        return None
+
+def calculate_booking_window(snapshot_date, stay_date):
+    """Calcola i giorni di booking window (quanti giorni prima della data di soggiorno)"""
+    return (stay_date - snapshot_date).days
+
+def compare_booking_curves(df_snapshots_2025, df_snapshot_2026):
+    """Confronta le booking curves 2025 vs 2026"""
+    
+    # Data snapshot 2026
+    snapshot_date_2026 = df_snapshot_2026['Snapshot_Date'].iloc[0]
+    
+    # Trova snapshot 2025 più vicina
+    snapshots_2025_unique = df_snapshots_2025.groupby('Snapshot_Date').size().reset_index()
+    snapshots_2025_unique['diff'] = abs(
+        (snapshots_2025_unique['Snapshot_Date'] - snapshot_date_2026.replace(year=2024)).dt.days
+    )
+    closest_snapshot = snapshots_2025_unique.loc[snapshots_2025_unique['diff'].idxmin(), 'Snapshot_Date']
+    
+    # Filtra snapshot 2025 più vicina
+    df_2025_comparable = df_snapshots_2025[df_snapshots_2025['Snapshot_Date'] == closest_snapshot].copy()
+    
+    # Calcola totali per confronto
+    comparison = {
+        'snapshot_date_2025': closest_snapshot,
+        'snapshot_date_2026': snapshot_date_2026,
+        'room_nights_2025': df_2025_comparable['Room nights'].sum(),
+        'room_nights_2026': df_snapshot_2026['Room nights'].sum(),
+        'adr_2025': df_2025_comparable['ADR Bed'].mean(),
+        'adr_2026': df_snapshot_2026['ADR Bed'].mean(),
+        'revenue_2025': (df_2025_comparable['Room nights'] * df_2025_comparable['ADR Bed']).sum(),
+        'revenue_2026': (df_snapshot_2026['Room nights'] * df_snapshot_2026['ADR Bed']).sum(),
+    }
+    
+    # Calcola gap
+    comparison['gap_room_nights'] = comparison['room_nights_2026'] - comparison['room_nights_2025']
+    comparison['gap_room_nights_pct'] = (comparison['gap_room_nights'] / comparison['room_nights_2025'] * 100) if comparison['room_nights_2025'] > 0 else 0
+    comparison['gap_adr'] = comparison['adr_2026'] - comparison['adr_2025']
+    comparison['gap_adr_pct'] = (comparison['gap_adr'] / comparison['adr_2025'] * 100) if comparison['adr_2025'] > 0 else 0
+    comparison['gap_revenue'] = comparison['revenue_2026'] - comparison['revenue_2025']
+    comparison['gap_revenue_pct'] = (comparison['gap_revenue'] / comparison['revenue_2025'] * 100) if comparison['revenue_2025'] > 0 else 0
+    
+    return comparison, df_2025_comparable
+
+def calculate_pickup_rates(df_snapshots_2025):
+    """Calcola i pickup rates tra snapshot consecutive"""
+    
+    snapshots_sorted = sorted(df_snapshots_2025['Snapshot_Date'].unique())
+    
+    pickup_data = []
+    
+    for i in range(len(snapshots_sorted) - 1):
+        snap_current = snapshots_sorted[i]
+        snap_next = snapshots_sorted[i + 1]
+        
+        df_current = df_snapshots_2025[df_snapshots_2025['Snapshot_Date'] == snap_current]
+        df_next = df_snapshots_2025[df_snapshots_2025['Snapshot_Date'] == snap_next]
+        
+        rn_current = df_current['Room nights'].sum()
+        rn_next = df_next['Room nights'].sum()
+        pickup = rn_next - rn_current
+        
+        days_between = (snap_next - snap_current).days
+        pickup_per_day = pickup / days_between if days_between > 0 else 0
+        
+        pickup_data.append({
+            'from_date': snap_current,
+            'to_date': snap_next,
+            'from_label': snap_current.strftime('%b %Y'),
+            'to_label': snap_next.strftime('%b %Y'),
+            'days_between': days_between,
+            'room_nights_start': rn_current,
+            'room_nights_end': rn_next,
+            'pickup_total': pickup,
+            'pickup_per_day': pickup_per_day
+        })
+    
+    return pd.DataFrame(pickup_data)
+
+def generate_rm_suggestions(comparison, monthly_gap, pickup_forecast):
+    """Genera suggerimenti di revenue management basati sui dati"""
+    
+    suggestions = []
+    
+    # Alert generale room nights
+    gap_pct = comparison['gap_room_nights_pct']
+    if gap_pct < -15:
+        suggestions.append({
+            'type': 'critical',
+            'icon': '🔴',
+            'title': 'CRITICO: Gap Room Nights Significativo',
+            'message': f"Sei {abs(gap_pct):.1f}% indietro rispetto al 2025 ({abs(comparison['gap_room_nights']):.0f} RN). Azione immediata richiesta.",
+            'actions': [
+                'Attiva campagne promozionali early booking',
+                'Considera riduzione tariffe per periodi deboli',
+                'Aumenta visibilità su OTA con deals speciali',
+                'Valuta flash sale per stimolare le prenotazioni'
+            ]
+        })
+    elif gap_pct < -5:
+        suggestions.append({
+            'type': 'warning',
+            'icon': '🟡',
+            'title': 'Attenzione: Booking Pace Lento',
+            'message': f"Sei {abs(gap_pct):.1f}% indietro rispetto al 2025 ({abs(comparison['gap_room_nights']):.0f} RN).",
+            'actions': [
+                'Monitora quotidianamente l\'evoluzione',
+                'Prepara campagne promozionali di riserva',
+                'Verifica posizionamento su OTA',
+                'Considera apertura early booking per periodi specifici'
+            ]
+        })
+    elif gap_pct > 5:
+        suggestions.append({
+            'type': 'success',
+            'icon': '🟢',
+            'title': 'Ottimo: Booking Pace Forte',
+            'message': f"Sei {gap_pct:.1f}% avanti rispetto al 2025 (+{comparison['gap_room_nights']:.0f} RN)!",
+            'actions': [
+                'Considera aumento tariffe per periodi ad alta domanda',
+                'Chiudi canali low-rate per proteggere ADR',
+                'Implementa strategia di yield management aggressiva',
+                'Valuta upgrade a camere premium'
+            ]
+        })
+    
+    # Alert ADR
+    adr_gap_pct = comparison['gap_adr_pct']
+    if adr_gap_pct > 5:
+        suggestions.append({
+            'type': 'success',
+            'icon': '💰',
+            'title': 'Eccellente: ADR in Crescita',
+            'message': f"ADR +{adr_gap_pct:.1f}% rispetto al 2025 (€{comparison['gap_adr']:.2f}).",
+            'actions': [
+                'Mantieni strategia pricing attuale',
+                'Continua a proteggere il posizionamento premium'
+            ]
+        })
+    elif adr_gap_pct < -5:
+        suggestions.append({
+            'type': 'warning',
+            'icon': '⚠️',
+            'title': 'Attenzione: ADR in Calo',
+            'message': f"ADR {adr_gap_pct:.1f}% rispetto al 2025 (€{comparison['gap_adr']:.2f}).",
+            'actions': [
+                'Rivedi strategia pricing',
+                'Valuta chiusura canali discount',
+                'Aumenta valore percepito con pacchetti inclusi'
+            ]
+        })
+    
+    # Suggerimenti per mesi specifici
+    if monthly_gap is not None and len(monthly_gap) > 0:
+        weak_months = monthly_gap[monthly_gap['gap_pct'] < -20]
+        if len(weak_months) > 0:
+            mesi_critici = ', '.join(weak_months['mese'].tolist())
+            suggestions.append({
+                'type': 'critical',
+                'icon': '📅',
+                'title': f'Mesi Critici: {mesi_critici}',
+                'message': 'Alcuni mesi hanno gap superiori a -20%',
+                'actions': [
+                    f'Focus immediato su {mesi_critici}',
+                    'Crea pacchetti specifici per questi periodi',
+                    'Intensifica marketing per queste date'
+                ]
+            })
+    
+    return suggestions
+
+# ===============================
+# ORIGINAL FUNCTIONS
+# ===============================
+
 # Configurazione pagina
 st.set_page_config(
     page_title="VOI Alimini - Forecasting ADR BED 2026",
@@ -439,12 +698,13 @@ def main():
     st.sidebar.metric("Totale Giorni", len(df_historical))
     
     # Tab principale
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📈 Forecast 2026", 
         "📊 Analisi Storica", 
         "🔍 Comparazione Anni",
         "📅 Analisi Mensile",
-        "📉 Metriche & Export"
+        "📉 Booking Curve & RM",
+        "💾 Metriche & Export"
     ])
     
     # Calcola seasonality e modelli
@@ -1368,9 +1628,320 @@ def main():
         )
     
     # =============================
-    # TAB 5: METRICHE DETTAGLIATE
+    # TAB 5: BOOKING CURVE & RM
     # =============================
     with tab5:
+        st.header("📊 Booking Curve Analysis & Revenue Management")
+        
+        # Upload snapshot 2026
+        st.markdown("### 📤 Carica OTB 2026 Corrente")
+        
+        uploaded_snapshot_2026 = st.file_uploader(
+            "Carica snapshot OTB attuale per stagione 2026",
+            type=['xlsx', 'xls'],
+            key='snapshot_2026',
+            help="File Excel con formato identico agli storici (Giorno, Room nights, ADR Bed, etc.)"
+        )
+        
+        if uploaded_snapshot_2026 is None:
+            st.info("""
+            ### 📋 Come Funziona
+            
+            1. **Carica lo snapshot OTB 2026** attuale usando il pulsante sopra
+            2. Il sistema confronta automaticamente con le **12 snapshot storiche 2025** (già caricate da GitHub)
+            3. Ricevi **analisi dettagliata del gap** (Room Nights, ADR, Revenue)
+            4. Ottieni **suggerimenti di Revenue Management** personalizzati
+            
+            #### 📊 Cosa Vedrai:
+            - Booking Curve 2025 vs 2026
+            - Gap Analysis per mese
+            - Pickup Rate Forecast
+            - Alert e Azioni Consigliate
+            """)
+            st.stop()
+        
+        # Carica snapshot 2025 da GitHub
+        with st.spinner('Caricamento snapshot storiche 2025...'):
+            df_snapshots_2025 = load_snapshots_2025()
+        
+        if df_snapshots_2025 is None:
+            st.error("❌ Impossibile caricare le snapshot storiche 2025 da GitHub")
+            st.stop()
+        
+        # Carica snapshot 2026
+        with st.spinner('Analisi snapshot 2026...'):
+            df_snapshot_2026 = load_snapshot_2026(uploaded_snapshot_2026)
+        
+        if df_snapshot_2026 is None:
+            st.error("❌ Errore nel caricamento dello snapshot 2026")
+            st.stop()
+        
+        st.success(f"✅ Snapshot caricate: 12 storiche 2025 + 1 attuale 2026")
+        
+        st.markdown("---")
+        
+        # Calcola confronto
+        comparison, df_2025_comparable = compare_booking_curves(df_snapshots_2025, df_snapshot_2026)
+        
+        # Metriche principali
+        st.markdown("### 📊 Gap Analysis: 2026 vs 2025")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric(
+                "Room Nights 2026",
+                f"{comparison['room_nights_2026']:,.0f}",
+                delta=f"{comparison['gap_room_nights']:+,.0f} ({comparison['gap_room_nights_pct']:+.1f}%)",
+                delta_color="normal"
+            )
+        
+        with col2:
+            st.metric(
+                "ADR Medio 2026",
+                f"€{comparison['adr_2026']:.2f}",
+                delta=f"€{comparison['gap_adr']:+.2f} ({comparison['gap_adr_pct']:+.1f}%)",
+                delta_color="normal"
+            )
+        
+        with col3:
+            st.metric(
+                "Revenue 2026",
+                f"€{comparison['revenue_2026']:,.0f}",
+                delta=f"€{comparison['gap_revenue']:+,.0f} ({comparison['gap_revenue_pct']:+.1f}%)",
+                delta_color="normal"
+            )
+        
+        with col4:
+            snapshot_label = comparison['snapshot_date_2026'].strftime('%d/%m/%Y')
+            comparable_label = comparison['snapshot_date_2025'].strftime('%d/%m/%Y')
+            st.metric(
+                "Data Confronto",
+                snapshot_label,
+                delta=f"vs {comparable_label}",
+                delta_color="off"
+            )
+        
+        st.markdown("---")
+        
+        # Booking Curve Graph
+        st.markdown("### 📈 Booking Curve: Evoluzione 2025 vs OTB 2026")
+        
+        fig_booking_curve = go.Figure()
+        
+        # Plot tutte le snapshot 2025
+        for snapshot_date in sorted(df_snapshots_2025['Snapshot_Date'].unique()):
+            df_snap = df_snapshots_2025[df_snapshots_2025['Snapshot_Date'] == snapshot_date]
+            
+            # Aggrega per mese
+            df_snap_monthly = df_snap.copy()
+            df_snap_monthly['Mese'] = df_snap_monthly['Data'].dt.to_period('M')
+            monthly_data = df_snap_monthly.groupby('Mese')['Room nights'].sum().reset_index()
+            monthly_data['Mese_Str'] = monthly_data['Mese'].dt.strftime('%b %Y')
+            
+            label = snapshot_date.strftime('%b %Y')
+            is_comparable = (snapshot_date == comparison['snapshot_date_2025'])
+            
+            fig_booking_curve.add_trace(go.Scatter(
+                x=monthly_data['Mese_Str'],
+                y=monthly_data['Room nights'],
+                mode='lines+markers',
+                name=f'2025 @ {label}',
+                line=dict(width=3 if is_comparable else 1.5, color='red' if is_comparable else 'lightgray'),
+                marker=dict(size=8 if is_comparable else 4),
+                opacity=1.0 if is_comparable else 0.3
+            ))
+        
+        # Plot snapshot 2026
+        df_2026_monthly = df_snapshot_2026.copy()
+        df_2026_monthly['Mese'] = df_2026_monthly['Data'].dt.to_period('M')
+        monthly_2026 = df_2026_monthly.groupby('Mese')['Room nights'].sum().reset_index()
+        monthly_2026['Mese_Str'] = monthly_2026['Mese'].dt.strftime('%b %Y')
+        
+        fig_booking_curve.add_trace(go.Scatter(
+            x=monthly_2026['Mese_Str'],
+            y=monthly_2026['Room nights'],
+            mode='lines+markers',
+            name=f'2026 @ {snapshot_label}',
+            line=dict(width=4, color='#2ecc71', dash='solid'),
+            marker=dict(size=10, symbol='star')
+        ))
+        
+        fig_booking_curve.update_layout(
+            title="Booking Curve Comparison: Come si è riempito il 2025 vs Come si sta riempiendo il 2026",
+            xaxis_title="Mese",
+            yaxis_title="Room Nights Cumulative",
+            hovermode='x unified',
+            height=500,
+            template='plotly_white',
+            legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02)
+        )
+        
+        st.plotly_chart(fig_booking_curve, use_container_width=True)
+        
+        # Gap mensile
+        st.markdown("### 📅 Gap Analysis per Mese")
+        
+        # Calcola gap per mese
+        df_2025_monthly = df_2025_comparable.copy()
+        df_2025_monthly['Mese'] = df_2025_monthly['Data'].dt.month
+        df_2025_monthly['Mese_Nome'] = df_2025_monthly['Data'].dt.strftime('%B')
+        monthly_2025 = df_2025_monthly.groupby(['Mese', 'Mese_Nome']).agg({
+            'Room nights': 'sum',
+            'ADR Bed': 'mean'
+        }).reset_index()
+        
+        df_2026_monthly_full = df_snapshot_2026.copy()
+        df_2026_monthly_full['Mese'] = df_2026_monthly_full['Data'].dt.month
+        df_2026_monthly_full['Mese_Nome'] = df_2026_monthly_full['Data'].dt.strftime('%B')
+        monthly_2026_full = df_2026_monthly_full.groupby(['Mese', 'Mese_Nome']).agg({
+            'Room nights': 'sum',
+            'ADR Bed': 'mean'
+        }).reset_index()
+        
+        # Merge
+        monthly_comparison = monthly_2025.merge(
+            monthly_2026_full,
+            on=['Mese', 'Mese_Nome'],
+            how='outer',
+            suffixes=('_2025', '_2026')
+        ).fillna(0)
+        
+        monthly_comparison['gap_rn'] = monthly_comparison['Room nights_2026'] - monthly_comparison['Room nights_2025']
+        monthly_comparison['gap_pct'] = (monthly_comparison['gap_rn'] / monthly_comparison['Room nights_2025'] * 100).replace([np.inf, -np.inf], 0)
+        monthly_comparison['gap_adr'] = monthly_comparison['ADR Bed_2026'] - monthly_comparison['ADR Bed_2025']
+        
+        # Grafico gap
+        fig_gap = go.Figure()
+        
+        colors_gap = ['#e74c3c' if x >= 0 else '#3498db' for x in monthly_comparison['gap_pct']]
+        
+        fig_gap.add_trace(go.Bar(
+            x=monthly_comparison['Mese_Nome'],
+            y=monthly_comparison['gap_pct'],
+            text=monthly_comparison['gap_pct'].apply(lambda x: f"{x:+.1f}%"),
+            textposition='outside',
+            marker_color=colors_gap,
+            name='Gap %',
+            hovertemplate='%{x}<br>Gap: %{y:.1f}%<extra></extra>'
+        ))
+        
+        fig_gap.add_hline(y=0, line_dash="solid", line_color="black", line_width=1)
+        fig_gap.add_hline(y=-20, line_dash="dash", line_color="red", line_width=1,
+                         annotation_text="Soglia Critica (-20%)", annotation_position="left")
+        
+        fig_gap.update_layout(
+            title="Gap Room Nights per Mese: 2026 vs 2025 (%)",
+            xaxis_title="Mese",
+            yaxis_title="Gap %",
+            height=400,
+            template='plotly_white',
+            showlegend=False
+        )
+        
+        st.plotly_chart(fig_gap, use_container_width=True)
+        
+        # Tabella dettaglio mensile
+        display_monthly = monthly_comparison[['Mese_Nome', 'Room nights_2025', 'Room nights_2026', 
+                                              'gap_rn', 'gap_pct', 'ADR Bed_2025', 'ADR Bed_2026']].copy()
+        display_monthly.columns = ['Mese', 'RN 2025', 'RN 2026', 'Gap RN', 'Gap %', 'ADR 2025', 'ADR 2026']
+        
+        st.dataframe(
+            display_monthly.style.format({
+                'RN 2025': '{:,.0f}',
+                'RN 2026': '{:,.0f}',
+                'Gap RN': '{:+,.0f}',
+                'Gap %': '{:+.1f}%',
+                'ADR 2025': '€{:.2f}',
+                'ADR 2026': '€{:.2f}'
+            }),
+            use_container_width=True
+        )
+        
+        st.markdown("---")
+        
+        # Pickup forecast
+        st.markdown("### 🚀 Pickup Rate & Forecast")
+        
+        pickup_df = calculate_pickup_rates(df_snapshots_2025)
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # Grafico pickup
+            fig_pickup = go.Figure()
+            
+            fig_pickup.add_trace(go.Bar(
+                x=pickup_df['from_label'],
+                y=pickup_df['pickup_total'],
+                text=pickup_df['pickup_total'].apply(lambda x: f"{x:,.0f}"),
+                textposition='outside',
+                marker_color='#3498db',
+                name='Pickup Totale'
+            ))
+            
+            fig_pickup.update_layout(
+                title="Pickup Room Nights tra Snapshot Consecutive (2025)",
+                xaxis_title="Periodo",
+                yaxis_title="Room Nights Aggiunte",
+                height=350,
+                template='plotly_white',
+                showlegend=False
+            )
+            
+            st.plotly_chart(fig_pickup, use_container_width=True)
+        
+        with col2:
+            st.markdown("#### 📊 Statistiche Pickup")
+            
+            avg_pickup = pickup_df['pickup_total'].mean()
+            max_pickup = pickup_df['pickup_total'].max()
+            total_pickup = pickup_df['pickup_total'].sum()
+            
+            st.metric("Pickup Medio", f"{avg_pickup:,.0f} RN")
+            st.metric("Pickup Massimo", f"{max_pickup:,.0f} RN")
+            st.metric("Pickup Totale 2025", f"{total_pickup:,.0f} RN")
+            
+            # Forecast semplice
+            rn_attuale_2026 = comparison['room_nights_2026']
+            snapshots_rimanenti = 12 - 3  # Assumendo siamo a snapshot #3
+            pickup_previsto = avg_pickup * snapshots_rimanenti
+            forecast_finale = rn_attuale_2026 + pickup_previsto
+            
+            st.markdown("---")
+            st.markdown("#### 🎯 Forecast Semplice")
+            st.metric("RN Attuali 2026", f"{rn_attuale_2026:,.0f}")
+            st.metric("Pickup Previsto", f"+{pickup_previsto:,.0f}")
+            st.metric("Forecast Finale", f"{forecast_finale:,.0f}")
+        
+        st.markdown("---")
+        
+        # Revenue Management Suggestions
+        st.markdown("### 💡 Suggerimenti Revenue Management")
+        
+        suggestions = generate_rm_suggestions(comparison, monthly_comparison, pickup_df)
+        
+        for suggestion in suggestions:
+            if suggestion['type'] == 'critical':
+                st.error(f"{suggestion['icon']} **{suggestion['title']}**\n\n{suggestion['message']}")
+            elif suggestion['type'] == 'warning':
+                st.warning(f"{suggestion['icon']} **{suggestion['title']}**\n\n{suggestion['message']}")
+            elif suggestion['type'] == 'success':
+                st.success(f"{suggestion['icon']} **{suggestion['title']}**\n\n{suggestion['message']}")
+            else:
+                st.info(f"{suggestion['icon']} **{suggestion['title']}**\n\n{suggestion['message']}")
+            
+            if 'actions' in suggestion and len(suggestion['actions']) > 0:
+                st.markdown("**Azioni Consigliate:**")
+                for action in suggestion['actions']:
+                    st.markdown(f"• {action}")
+            
+            st.markdown("")
+    
+    # =============================
+    # TAB 6: METRICHE DETTAGLIATE
+    # =============================
+    with tab6:
         st.header("Metriche Dettagliate e Insights")
         
         col1, col2 = st.columns(2)
