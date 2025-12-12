@@ -921,6 +921,13 @@ def main():
     ])
     
     # Calcola seasonality e modelli
+    
+    # Variabili per tracking snapshot comparabile (DEVONO essere qui per essere accessibili in tutti i tab)
+    has_exact_comparable = False
+    exact_comparable_date = None
+    df_snapshots_2025 = None
+    df_snapshot_2026 = None
+    
     try:
         with st.spinner('Costruzione modelli predittivi...'):
             seasonality = calculate_seasonality_index(df_historical)
@@ -930,10 +937,6 @@ def main():
         # Carica snapshot 2025 e 2026 per forecast ibrido
         with st.spinner('Caricamento snapshot OTB...'):
             df_snapshots_2025 = load_snapshots_2025()
-            
-            # Variabile per tracciare se abbiamo snapshot comparabile esatta
-            has_exact_comparable = False
-            exact_comparable_date = None
             
             # Se disponibile, usa snapshot 2025 comparabile caricato dall'utente
             if uploaded_snapshot_2025_comparable:
