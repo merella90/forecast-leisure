@@ -101,7 +101,7 @@ def calculate_booking_window(snapshot_date, stay_date):
     """Calcola i giorni di booking window (quanti giorni prima della data di soggiorno)"""
     return (stay_date - snapshot_date).days
 
-def compare_booking_curves(df_snapshots_2025, df_snapshot_2026, force_date=None):
+def compare_booking_curves(df_snapshots_2025, df_snapshot_2026, force_date=None, debug=False):
     """Confronta le booking curves 2025 vs 2026"""
     
     # Data snapshot 2026
@@ -109,39 +109,48 @@ def compare_booking_curves(df_snapshots_2025, df_snapshot_2026, force_date=None)
     
     # Se viene fornita una data specifica da usare, cerca quella esatta
     if force_date is not None:
-        # DEBUG
-        print(f"DEBUG: force_date fornita: {force_date.strftime('%d/%m/%Y')}")
+        if debug:
+            st.write(f"🔍 force_date fornita: **{force_date.strftime('%d/%m/%Y')}**")
         
         # Cerca snapshot 2025 alla data esatta
         matching_snapshots = df_snapshots_2025[
             df_snapshots_2025['Snapshot_Date'].dt.date == force_date.date()
         ]
         
-        print(f"DEBUG: Snapshot trovate per {force_date.date()}: {len(matching_snapshots)}")
+        if debug:
+            st.write(f"🔍 Snapshot trovate per {force_date.date()}: **{len(matching_snapshots)}**")
+            if len(matching_snapshots) > 0:
+                st.write(f"🔍 Room Nights nella snapshot: **{matching_snapshots['Room nights'].sum():.0f}**")
         
         if len(matching_snapshots) > 0:
             closest_snapshot = force_date
             df_2025_comparable = matching_snapshots.copy()
-            print(f"DEBUG: Usando snapshot esatta del {closest_snapshot.strftime('%d/%m/%Y')}")
+            if debug:
+                st.success(f"✅ Usando snapshot ESATTA del {closest_snapshot.strftime('%d/%m/%Y')}")
         else:
             # Fallback: cerca la più vicina
-            print("DEBUG: Snapshot esatta non trovata, usando fallback")
+            if debug:
+                st.warning("⚠️ Snapshot esatta non trovata, usando fallback")
             snapshots_2025_unique = df_snapshots_2025.groupby('Snapshot_Date').size().reset_index()
             snapshots_2025_unique['diff'] = abs(
                 (snapshots_2025_unique['Snapshot_Date'] - force_date).dt.days
             )
             closest_snapshot = snapshots_2025_unique.loc[snapshots_2025_unique['diff'].idxmin(), 'Snapshot_Date']
             df_2025_comparable = df_snapshots_2025[df_snapshots_2025['Snapshot_Date'] == closest_snapshot].copy()
-            print(f"DEBUG: Usando snapshot più vicina del {closest_snapshot.strftime('%d/%m/%Y')}")
+            if debug:
+                st.info(f"ℹ️ Usando snapshot più vicina del {closest_snapshot.strftime('%d/%m/%Y')}")
     else:
         # Trova snapshot 2025 più vicina (logica originale)
+        if debug:
+            st.info("ℹ️ Nessuna force_date, usando snapshot più vicina")
         snapshots_2025_unique = df_snapshots_2025.groupby('Snapshot_Date').size().reset_index()
         snapshots_2025_unique['diff'] = abs(
             (snapshots_2025_unique['Snapshot_Date'] - snapshot_date_2026.replace(year=2024)).dt.days
         )
         closest_snapshot = snapshots_2025_unique.loc[snapshots_2025_unique['diff'].idxmin(), 'Snapshot_Date']
         df_2025_comparable = df_snapshots_2025[df_snapshots_2025['Snapshot_Date'] == closest_snapshot].copy()
-        print(f"DEBUG: Nessuna force_date, usando snapshot più vicina del {closest_snapshot.strftime('%d/%m/%Y')}")
+        if debug:
+            st.info(f"ℹ️ Snapshot più vicina: {closest_snapshot.strftime('%d/%m/%Y')}")
     
     # Calcola totali per confronto
     comparison = {
@@ -1936,17 +1945,20 @@ def main():
         # Calcola confronto - usa data specifica se snapshot comparabile è caricato
         force_comparison_date = exact_comparable_date if has_exact_comparable else None
         
-        # DEBUG
-        if force_comparison_date:
-            st.info(f"🔍 DEBUG: Forzo confronto con data {force_comparison_date.strftime('%d/%m/%Y')}")
-        else:
-            st.info(f"🔍 DEBUG: Nessuna data forzata, userò la più vicina")
-        
-        comparison, df_2025_comparable = compare_booking_curves(
-            df_snapshots_2025, 
-            df_snapshot_2026,
-            force_date=force_comparison_date
-        )
+        # DEBUG - Expander per info tecniche
+        with st.expander("🔍 Debug Info", expanded=True):
+            if force_comparison_date:
+                st.info(f"**Forzo confronto con data:** {force_comparison_date.strftime('%d/%m/%Y')}")
+            else:
+                st.info("**Nessuna data forzata**, userò la più vicina disponibile")
+            
+            # Mostra chiamata alla funzione con debug attivo
+            comparison, df_2025_comparable = compare_booking_curves(
+                df_snapshots_2025, 
+                df_snapshot_2026,
+                force_date=force_comparison_date,
+                debug=True  # Attiva debug
+            )
         
         # Mostra date di confronto
         booking_window_diff = abs((comparison['snapshot_date_2026'] - comparison['snapshot_date_2025'].replace(year=2025)).days)
