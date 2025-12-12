@@ -618,18 +618,30 @@ def main():
         display_df = monthly_forecast[['Mese', 'Giorni', 'ADR_Medio', 'ADR_Min', 'ADR_Max', 
                                        'ADR_2025', 'ADR_2024', 'ADR_2023', 'Var_vs_2025_%']].copy()
         
-        st.dataframe(
-            display_df.style.format({
-                'ADR_Medio': '€{:.2f}',
-                'ADR_Min': '€{:.2f}',
-                'ADR_Max': '€{:.2f}',
-                'ADR_2025': '€{:.2f}',
-                'ADR_2024': '€{:.2f}',
-                'ADR_2023': '€{:.2f}',
-                'Var_vs_2025_%': '{:+.2f}%'
-            }).background_gradient(subset=['Var_vs_2025_%'], cmap='RdYlGn', vmin=-10, vmax=10),
-            use_container_width=True
-        )
+        # Formatta e colora le celle basandosi sulla variazione
+        def color_variation(val):
+            if pd.isna(val):
+                return ''
+            if val > 5:
+                return 'background-color: #d4edda; color: #155724'  # Verde scuro
+            elif val > 0:
+                return 'background-color: #d1ecf1; color: #0c5460'  # Azzurro
+            elif val > -5:
+                return 'background-color: #fff3cd; color: #856404'  # Giallo
+            else:
+                return 'background-color: #f8d7da; color: #721c24'  # Rosso
+        
+        styled_df = display_df.style.format({
+            'ADR_Medio': '€{:.2f}',
+            'ADR_Min': '€{:.2f}',
+            'ADR_Max': '€{:.2f}',
+            'ADR_2025': '€{:.2f}',
+            'ADR_2024': '€{:.2f}',
+            'ADR_2023': '€{:.2f}',
+            'Var_vs_2025_%': '{:+.2f}%'
+        }).applymap(color_variation, subset=['Var_vs_2025_%'])
+        
+        st.dataframe(styled_df, use_container_width=True)
         
         # Grafico comparativo mensile
         st.markdown("#### 📊 Confronto ADR Mensile: 2023-2026")
@@ -1137,6 +1149,9 @@ def main():
         
         # Tabella dettagliata giornaliera
         st.markdown(f"### 📋 Dettaglio Giornaliero {mese_selezionato} 2026")
+        
+        # Ordina i dati per data
+        df_mese_2026_sorted = df_mese_2026.sort_values('Data').copy()
         
         df_detail = df_mese_2026_sorted[['Data', 'Giorno_Nome_IT', 'ADR_Bed_Forecast']].copy()
         df_detail['Data'] = df_detail['Data'].dt.strftime('%d/%m/%Y')
