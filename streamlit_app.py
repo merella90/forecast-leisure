@@ -1005,6 +1005,14 @@ def main():
     df_snapshots_2025 = None
     df_snapshot_2026 = None
     
+    # Calcola ratio ADR Cam/Bed dai dati storici (se disponibile)
+    adr_cam_bed_ratio = None
+    if 'ADR Cam' in df_historical.columns and 'ADR Bed' in df_historical.columns:
+        df_valid = df_historical[(df_historical['ADR Cam'].notna()) & (df_historical['ADR Bed'].notna()) & (df_historical['ADR Bed'] > 0)]
+        if len(df_valid) > 0:
+            adr_cam_bed_ratio = (df_valid['ADR Cam'] / df_valid['ADR Bed']).mean()
+            st.sidebar.info(f"📊 Ratio ADR Cam/Bed storico: {adr_cam_bed_ratio:.2f}x")
+    
     try:
         with st.spinner('Costruzione modelli predittivi...'):
             seasonality = calculate_seasonality_index(df_historical)
@@ -1084,8 +1092,19 @@ def main():
             pax_per_camera_medio = 2.2
             df_forecast['Bed_Nights_Forecast'] = df_forecast['Room_Nights_Forecast'] * pax_per_camera_medio
             
-            # Calcola Revenue
-            df_forecast['Revenue_Forecast'] = df_forecast['Bed_Nights_Forecast'] * df_forecast['ADR_Bed_Forecast']
+            # Calcola ADR Cam dal ratio storico (se disponibile)
+            if adr_cam_bed_ratio is not None:
+                df_forecast['ADR_Cam_Forecast'] = df_forecast['ADR_Bed_Forecast'] * adr_cam_bed_ratio
+            else:
+                # Fallback: usa pax_per_camera_medio come proxy
+                df_forecast['ADR_Cam_Forecast'] = df_forecast['ADR_Bed_Forecast'] * pax_per_camera_medio
+            
+            # Calcola Revenue usando ADR Cam (più accurato)
+            if adr_cam_bed_ratio is not None:
+                df_forecast['Revenue_Forecast'] = df_forecast['Room_Nights_Forecast'] * df_forecast['ADR_Cam_Forecast']
+            else:
+                # Fallback originale
+                df_forecast['Revenue_Forecast'] = df_forecast['Bed_Nights_Forecast'] * df_forecast['ADR_Bed_Forecast']
             
             # Calcola RevPAR
             df_forecast['RevPAR_Forecast'] = df_forecast['ADR_Bed_Forecast'] * df_forecast['Occupazione_Forecast']
@@ -1123,7 +1142,7 @@ def main():
     # TAB 1: FORECAST 2026
     # =============================
     with tab1:
-        st.header("Previsione ADR BED per Stagione 2026")
+        st.header("Previsione ADR per Stagione 2026")
         
         # Badge Forecast Ibrido
         otb_days = (df_forecast['Source'] == 'OTB_Real').sum()
@@ -1143,16 +1162,24 @@ def main():
         
         with col1:
             st.metric(
-                "ADR Medio 2026",
+                "ADR Bed Medio 2026",
                 f"€{metrics['ADR_Medio_Forecast']:.2f}",
                 delta=f"{metrics['Variazione_vs_2025']:.1f}% vs 2025"
             )
+            # Aggiungi ADR Cam se disponibile
+            if 'ADR_Cam_Forecast' in df_forecast.columns:
+                adr_cam_medio = df_forecast['ADR_Cam_Forecast'].mean()
+                st.caption(f"ADR Cam: €{adr_cam_medio:.2f}")
         
         with col2:
             st.metric(
-                "ADR Medio 2025",
+                "ADR Bed Medio 2025",
                 f"€{metrics['ADR_Medio_2025']:.2f}"
             )
+            # Aggiungi ADR Cam 2025 se disponibile nei dati storici
+            if 'ADR Cam' in df_historical.columns:
+                adr_cam_2025 = df_historical[df_historical['ADR Cam'].notna()]['ADR Cam'].mean()
+                st.caption(f"ADR Cam: €{adr_cam_2025:.2f}")
         
         with col3:
             st.metric(
@@ -1263,6 +1290,47 @@ def main():
         )
         
         st.plotly_chart(fig_forecast, use_container_width=True)
+        
+        # Grafico ADR Cam se disponibile
+        if 'ADR_Cam_Forecast' in df_forecast.columns and adr_cam_bed_ratio is not None:
+            st.markdown("### 🏨 ADR Camera (Room) - Forecast 2026")
+            
+            fig_adr_cam = go.Figure()
+            
+            # Storico 2025 ADR Cam se disponibile
+            if 'ADR Cam' in df_historical.columns:
+                df_2025_cam = df_historical[(df_historical['Anno'] == 2025) & (df_historical['ADR Cam'].notna())].sort_values('Data')
+                if len(df_2025_cam) > 0:
+                    fig_adr_cam.add_trace(go.Scatter(
+                        x=df_2025_cam['Data'],
+                        y=df_2025_cam['ADR Cam'],
+                        mode='lines+markers',
+                        name='2025 Effettivo',
+                        line=dict(color='#2ecc71', width=2),
+                        marker=dict(size=4)
+                    ))
+            
+            # Forecast 2026 ADR Cam
+            fig_adr_cam.add_trace(go.Scatter(
+                x=df_forecast['Data'],
+                y=df_forecast['ADR_Cam_Forecast'],
+                mode='lines+markers',
+                name='2026 Forecast',
+                line=dict(color='#e74c3c', width=3),
+                marker=dict(size=5)
+            ))
+            
+            fig_adr_cam.update_layout(
+                title=f"ADR Camera Previsto 2026 (Ratio: {adr_cam_bed_ratio:.2f}x vs ADR Bed)",
+                xaxis_title="Data",
+                yaxis_title="ADR Camera (€)",
+                hovermode='x unified',
+                height=400,
+                template='plotly_white',
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            
+            st.plotly_chart(fig_adr_cam, use_container_width=True)
         
         # Grafici Room Nights e Revenue
         st.markdown("### 📊 Room Nights e Revenue 2026")
