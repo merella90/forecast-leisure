@@ -8,6 +8,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.ensemble import RandomForestRegressor
 import warnings
+import io
 warnings.filterwarnings('ignore')
 
 # Configurazione pagina
@@ -44,13 +45,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 @st.cache_data
-def load_historical_data():
+def load_historical_data(file_2023, file_2024, file_2025):
     """Carica e processa i dati storici dalle tre stagioni"""
     
     # Carica i tre file
-    df_2023 = pd.read_excel('/mnt/user-data/uploads/data_-_2025-12-12T094115_964.xlsx')
-    df_2024 = pd.read_excel('/mnt/user-data/uploads/data_-_2025-12-12T094130_903.xlsx')
-    df_2025 = pd.read_excel('/mnt/user-data/uploads/data_-_2025-12-12T094201_252.xlsx')
+    df_2023 = pd.read_excel(file_2023)
+    df_2024 = pd.read_excel(file_2024)
+    df_2025 = pd.read_excel(file_2025)
     
     # Aggiungi anno a ciascun dataframe
     df_2023['Anno'] = 2023
@@ -235,9 +236,66 @@ def main():
     st.markdown('<h1 class="main-header">🏨 VOI Alimini Resort</h1>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">Forecasting ADR BED 2026 - Segmenti Diretti</p>', unsafe_allow_html=True)
     
+    # File Upload Section
+    st.sidebar.header("📁 Caricamento Dati")
+    
+    with st.sidebar.expander("Carica File Storici", expanded=True):
+        uploaded_file_2023 = st.file_uploader(
+            "Dati Stagione 2023 (Excel)",
+            type=['xlsx', 'xls'],
+            key='file_2023',
+            help="Carica il file Excel con i dati della stagione 2023"
+        )
+        
+        uploaded_file_2024 = st.file_uploader(
+            "Dati Stagione 2024 (Excel)",
+            type=['xlsx', 'xls'],
+            key='file_2024',
+            help="Carica il file Excel con i dati della stagione 2024"
+        )
+        
+        uploaded_file_2025 = st.file_uploader(
+            "Dati Stagione 2025 (Excel)",
+            type=['xlsx', 'xls'],
+            key='file_2025',
+            help="Carica il file Excel con i dati della stagione 2025"
+        )
+    
+    # Verifica che tutti i file siano stati caricati
+    if not all([uploaded_file_2023, uploaded_file_2024, uploaded_file_2025]):
+        st.warning("⚠️ Carica tutti e tre i file Excel (stagioni 2023, 2024, 2025) per procedere con il forecasting.")
+        
+        st.info("""
+        ### 📋 Formato Richiesto
+        
+        I file Excel devono contenere le seguenti colonne:
+        - `Giorno` (formato: "Dom 28/05/2023")
+        - `% Occ.` (occupazione percentuale)
+        - `Room nights`
+        - `Bed nights`
+        - `ADR Bed` (Average Daily Rate per posto letto)
+        - `RevPar`
+        
+        ### 📊 Segmenti di Analisi
+        Focus su segmenti diretti:
+        - SITO WEB
+        - WEB PORTALI (OTA)
+        - DIRETTI INDIVIDUALI
+        """)
+        
+        st.stop()
+    
     # Carica dati
-    with st.spinner('Caricamento dati storici...'):
-        df_historical = load_historical_data()
+    try:
+        with st.spinner('Caricamento e analisi dati storici...'):
+            df_historical = load_historical_data(uploaded_file_2023, uploaded_file_2024, uploaded_file_2025)
+        
+        st.sidebar.success(f"✅ Dati caricati: {len(df_historical)} giorni")
+    
+    except Exception as e:
+        st.error(f"❌ Errore nel caricamento dei dati: {str(e)}")
+        st.info("Verifica che i file Excel abbiano il formato corretto con tutte le colonne necessarie.")
+        st.stop()
     
     # Sidebar per controlli
     st.sidebar.header("⚙️ Configurazione Forecast")
