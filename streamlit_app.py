@@ -2134,7 +2134,8 @@ def main():
         # Grafico gap
         fig_gap = go.Figure()
         
-        colors_gap = ['#e74c3c' if x >= 0 else '#3498db' for x in monthly_comparison['gap_pct']]
+        # ROSSO = negativo (sotto target), VERDE = positivo (sopra target)
+        colors_gap = ['#e74c3c' if x < 0 else '#27ae60' for x in monthly_comparison['gap_pct']]
         
         fig_gap.add_trace(go.Bar(
             x=monthly_comparison['Mese_Nome'],
@@ -2154,9 +2155,10 @@ def main():
             title="Gap Room Nights per Mese: 2026 vs 2025 (%)",
             xaxis_title="Mese",
             yaxis_title="Gap %",
-            height=400,
+            height=500,  # Aumentato per evitare label tagliate
             template='plotly_white',
-            showlegend=False
+            showlegend=False,
+            margin=dict(t=80, b=50, l=50, r=50)  # Margini per label
         )
         
         st.plotly_chart(fig_gap, use_container_width=True)
