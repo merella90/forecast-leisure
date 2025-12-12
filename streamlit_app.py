@@ -798,30 +798,6 @@ def main():
         except Exception as e:
             st.sidebar.error(f"Errore lettura snapshot 2026: {str(e)}")
     
-    # Verifica che tutti i file siano stati caricati
-    if not all([uploaded_file_2023, uploaded_file_2024, uploaded_file_2025]):
-        st.warning("⚠️ Carica tutti e tre i file Excel (stagioni 2023, 2024, 2025) per procedere con il forecasting.")
-        
-        st.info("""
-        ### 📋 Formato Richiesto
-        
-        I file Excel devono contenere le seguenti colonne:
-        - `Giorno` (formato: "Dom 28/05/2023")
-        - `% Occ.` (occupazione percentuale)
-        - `Room nights`
-        - `Bed nights`
-        - `ADR Bed` (Average Daily Rate per posto letto)
-        - `RevPar`
-        
-        ### 📊 Segmenti di Analisi
-        Focus su segmenti diretti:
-        - SITO WEB
-        - WEB PORTALI (OTA)
-        - DIRETTI INDIVIDUALI
-        """)
-        
-        st.stop()
-    
     # NUOVO: Verifica snapshot 2026
     if not uploaded_snapshot_2026:
         st.error("🔴 **SNAPSHOT OTB 2026 OBBLIGATORIA**")
