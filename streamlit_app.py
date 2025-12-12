@@ -70,14 +70,28 @@ def load_historical_data(file_2023, file_2024, file_2025):
         # Combina i dataframe
         df_all = pd.concat([df_2023, df_2024, df_2025], ignore_index=True)
         
-        # Parsing della data
-        df_all['Data'] = pd.to_datetime(df_all['Giorno'], format='%a %d/%m/%Y', errors='coerce')
+        # Parsing della data - rimuovi il nome del giorno e parsa solo la data
+        # Formato: "Dom 28/05/2023" -> "28/05/2023"
+        def parse_italian_date(date_str):
+            try:
+                # Rimuovi il nome del giorno (primi 3-4 caratteri + spazio)
+                date_only = date_str.split(' ', 1)[-1] if isinstance(date_str, str) else date_str
+                # Parsa la data nel formato gg/mm/aaaa
+                return pd.to_datetime(date_only, format='%d/%m/%Y', errors='coerce')
+            except:
+                return pd.NaT
+        
+        df_all['Data'] = df_all['Giorno'].apply(parse_italian_date)
+        
+        # Conta quante date sono valide prima del filtro
+        valid_dates_count = df_all['Data'].notna().sum()
+        total_rows = len(df_all)
         
         # Rimuovi righe senza data valida
         df_all = df_all.dropna(subset=['Data'])
         
         if len(df_all) == 0:
-            raise ValueError("Nessuna data valida trovata nei file. Verifica il formato delle date.")
+            raise ValueError(f"Nessuna data valida trovata nei file ({valid_dates_count}/{total_rows} righe avevano date valide). Verifica il formato delle date nel campo 'Giorno'.")
         
         # Estrai informazioni temporali
         df_all['Mese'] = df_all['Data'].dt.month
