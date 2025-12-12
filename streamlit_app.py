@@ -35,7 +35,7 @@ def load_snapshots_2025():
         ('snapshot_12_finale_2025.xlsx', '2025-10-01'),
     ]
     
-    base_path = 'data/snapshots_2025/'
+    base_path = 'snapshots_2025/'
     
     for filename, snapshot_date in snapshot_dates:
         try:
