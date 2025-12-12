@@ -7,12 +7,16 @@ from datetime import datetime, timedelta
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.ensemble import RandomForestRegressor
+
+# Try importing SARIMA
+SARIMA_AVAILABLE = False
 try:
     from statsmodels.tsa.statespace.sarimax import SARIMAX
+    import warnings
+    warnings.filterwarnings('ignore')
     SARIMA_AVAILABLE = True
 except ImportError:
-    SARIMA_AVAILABLE = False
-    st.sidebar.warning("⚠️ statsmodels non disponibile - SARIMA disabilitato")
+    pass  # SARIMA not available, will use RF only
 import warnings
 import io
 warnings.filterwarnings('ignore')
@@ -611,6 +615,7 @@ def build_forecast_models(df):
     
     # 4. SARIMA (se disponibile) - ottimo per dati stagionali
     if SARIMA_AVAILABLE:
+        st.sidebar.info("✅ SARIMA disponibile - training in corso...")
         try:
             # Prepara serie temporale
             df_ts = df_train.copy()
@@ -625,9 +630,13 @@ def build_forecast_models(df):
                                    enforce_invertibility=False)
             sarima_fit = sarima_model.fit(disp=False, maxiter=50)
             models['SARIMA'] = sarima_fit
+            st.sidebar.success("✅ SARIMA allenato con successo!")
         except Exception as e:
-            st.sidebar.warning(f"⚠️ SARIMA training fallito: {str(e)}")
+            st.sidebar.error(f"❌ SARIMA training fallito: {str(e)[:100]}")
             models['SARIMA'] = None
+    else:
+        st.sidebar.warning("⚠️ statsmodels non disponibile - usando solo RF")
+        models['SARIMA'] = None
     
     return models
 
@@ -1487,8 +1496,18 @@ def main():
                 y=df_forecast['ADR_Bed_RF'],
                 mode='lines',
                 name='Random Forest',
-                line=dict(dash='dashdot')
+                line=dict(dash='dashdot', color='green')
             ))
+            
+            # Aggiungi SARIMA se disponibile
+            if 'ADR_Bed_SARIMA' in df_forecast.columns:
+                fig_models.add_trace(go.Scatter(
+                    x=df_forecast['Data'],
+                    y=df_forecast['ADR_Bed_SARIMA'],
+                    mode='lines',
+                    name='SARIMA',
+                    line=dict(dash='longdash', color='cyan', width=2)
+                ))
             
             fig_models.add_trace(go.Scatter(
                 x=df_forecast['Data'],
@@ -1644,10 +1663,17 @@ def main():
         
         st.dataframe(styled_df, use_container_width=True)
         
-        # Grafico comparativo mensile
+        # Grafico comparativo mensile (usa sempre forecast per confronto storico)
         st.markdown("#### 📊 Confronto ADR Mensile: 2023-2026")
         
         fig_monthly_comparison = go.Figure()
+        
+        # Per il grafico, usa sempre monthly_forecast (che ha dati storici completi)
+        # Aggiungi dati storici a monthly_forecast se non ci sono già
+        if 'ADR_2023' not in monthly_forecast.columns:
+            monthly_forecast['ADR_2025'] = monthly_forecast['Mese_Num'].map(monthly_2025)
+            monthly_forecast['ADR_2024'] = monthly_forecast['Mese_Num'].map(monthly_2024)
+            monthly_forecast['ADR_2023'] = monthly_forecast['Mese_Num'].map(monthly_2023)
         
         # Ordina i mesi
         monthly_plot = monthly_forecast.sort_values('Mese_Num')
