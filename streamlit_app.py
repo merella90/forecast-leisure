@@ -913,13 +913,26 @@ def main():
         with st.spinner('Caricamento snapshot OTB...'):
             df_snapshots_2025 = load_snapshots_2025()
             
+            # Variabile per tracciare se abbiamo snapshot comparabile esatta
+            has_exact_comparable = False
+            exact_comparable_date = None
+            
             # Se disponibile, usa snapshot 2025 comparabile caricato dall'utente
             if uploaded_snapshot_2025_comparable:
                 df_snapshot_2025_user = load_snapshot_2026(uploaded_snapshot_2025_comparable)  # Riusa la stessa funzione
                 if df_snapshot_2025_user is not None:
-                    # Aggiorna la data dello snapshot
-                    df_snapshot_2025_user['Snapshot_Date'] = snapshot_2026_date.replace(year=2024)
-                    df_snapshot_2025_user['Snapshot_Label'] = snapshot_2026_date.replace(year=2024).strftime('%b %Y')
+                    # Calcola data target
+                    target_date = snapshot_2026_date.replace(year=2024)
+                    
+                    # IMPORTANTE: Rimuovi snapshot GitHub alla stessa data se esiste
+                    if df_snapshots_2025 is not None:
+                        df_snapshots_2025 = df_snapshots_2025[
+                            df_snapshots_2025['Snapshot_Date'].dt.date != target_date.date()
+                        ]
+                    
+                    # Aggiorna la data dello snapshot user
+                    df_snapshot_2025_user['Snapshot_Date'] = target_date
+                    df_snapshot_2025_user['Snapshot_Label'] = target_date.strftime('%b %Y')
                     
                     # Aggiungi alle snapshot 2025
                     if df_snapshots_2025 is not None:
@@ -927,7 +940,10 @@ def main():
                     else:
                         df_snapshots_2025 = df_snapshot_2025_user
                     
-                    st.sidebar.success("✅ Snapshot 2025 comparabile integrata!")
+                    has_exact_comparable = True
+                    exact_comparable_date = target_date
+                    
+                    st.sidebar.success(f"✅ Snapshot 2025 del {target_date.strftime('%d/%m/%Y')} integrata!")
             
             df_snapshot_2026 = load_snapshot_2026(uploaded_snapshot_2026)
         
@@ -1891,17 +1907,15 @@ def main():
         st.header("📊 Booking Curve Analysis & Revenue Management")
         
         # Le snapshot sono già caricate (2025 da GitHub + opzionale user, 2026 da sidebar)
-        if uploaded_snapshot_2025_comparable:
-            st.success(f"✅ Confronto perfetto attivato: Snapshot 2025 alla stessa data caricata!")
+        if has_exact_comparable:
+            st.success(f"✅ Confronto perfetto attivato: Snapshot 2025 del {exact_comparable_date.strftime('%d/%m/%Y')} caricata!")
         else:
             st.info(f"ℹ️ Confronto con snapshot 2025 più vicina disponibile")
         
         st.markdown("---")
         
         # Calcola confronto - usa data specifica se snapshot comparabile è caricato
-        force_comparison_date = None
-        if uploaded_snapshot_2025_comparable:
-            force_comparison_date = snapshot_2026_date.replace(year=2024)
+        force_comparison_date = exact_comparable_date if has_exact_comparable else None
         
         comparison, df_2025_comparable = compare_booking_curves(
             df_snapshots_2025, 
