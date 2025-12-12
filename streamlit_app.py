@@ -101,15 +101,22 @@ def load_snapshot_2026(uploaded_file):
         df = df.dropna(subset=['Data'])
         df = df[df['ADR Bed'] > 0].copy()
         
+        # IMPORTANTE: Gestisci ADR Cam se disponibile
+        has_adr_cam = 'ADR Cam' in df.columns and df['ADR Cam'].notna().any()
+        
         # IMPORTANTE: Se esiste colonna Room Revenue, usala invece di calcolarla
         if 'Room Revenue' in df.columns:
             # Usa revenue reale dal file
             df['Revenue'] = df['Room Revenue']
-            st.sidebar.info("✅ Usando Room Revenue dal file (non calcolata)")
+            revenue_source = "Room Revenue (file)"
+        elif has_adr_cam:
+            # Calcola da Room nights × ADR Cam
+            df['Revenue'] = df['Room nights'] * df['ADR Cam']
+            revenue_source = "RN × ADR Cam"
         else:
             # Fallback: calcola da Room nights × ADR Bed
             df['Revenue'] = df['Room nights'] * df['ADR Bed']
-            st.sidebar.warning("⚠️ Calcolando Revenue da RN × ADR Bed")
+            revenue_source = "RN × ADR Bed"
         
         if len(df) > 0:
             # Usa la data minima come snapshot date (inizio stagione)
@@ -118,11 +125,19 @@ def load_snapshot_2026(uploaded_file):
             
             total_revenue = df['Revenue'].sum()
             
-            st.sidebar.write(f"✅ Snapshot caricata:")
-            st.sidebar.write(f"   • {len(df)} giorni")
-            st.sidebar.write(f"   • {df['Room nights'].sum():.0f} RN")
-            st.sidebar.write(f"   • ADR €{df['ADR Bed'].mean():.2f}")
-            st.sidebar.write(f"   • Revenue €{total_revenue:,.0f}")
+            st.sidebar.write(f"✅ **Snapshot caricata:**")
+            st.sidebar.write(f"   • Giorni: {len(df)}")
+            st.sidebar.write(f"   • Room Nights: {df['Room nights'].sum():.0f}")
+            
+            # Mostra ADR Bed e ADR Cam se disponibile
+            st.sidebar.write(f"   • ADR Bed: €{df['ADR Bed'].mean():.2f}")
+            if has_adr_cam:
+                st.sidebar.write(f"   • ADR Cam: €{df['ADR Cam'].mean():.2f}")
+                pax_per_room = df['ADR Cam'].mean() / df['ADR Bed'].mean()
+                st.sidebar.write(f"   • Pax/Camera: {pax_per_room:.2f}")
+            
+            st.sidebar.write(f"   • Revenue: €{total_revenue:,.0f}")
+            st.sidebar.caption(f"   ({revenue_source})")
             
             return df
         else:
@@ -201,15 +216,24 @@ def compare_booking_curves(df_snapshots_2025, df_snapshot_2026, force_date=None,
     else:
         revenue_2026 = (df_snapshot_2026['Room nights'] * df_snapshot_2026['ADR Bed']).sum()
     
+    # Check se ADR Cam è disponibile
+    has_adr_cam_2025 = 'ADR Cam' in df_2025_comparable.columns and df_2025_comparable['ADR Cam'].notna().any()
+    has_adr_cam_2026 = 'ADR Cam' in df_snapshot_2026.columns and df_snapshot_2026['ADR Cam'].notna().any()
+    
     comparison = {
         'snapshot_date_2025': closest_snapshot,
         'snapshot_date_2026': snapshot_date_2026,
         'room_nights_2025': df_2025_comparable['Room nights'].sum(),
         'room_nights_2026': df_snapshot_2026['Room nights'].sum(),
-        'adr_2025': df_2025_comparable['ADR Bed'].mean(),
-        'adr_2026': df_snapshot_2026['ADR Bed'].mean(),
+        'adr_bed_2025': df_2025_comparable['ADR Bed'].mean(),
+        'adr_bed_2026': df_snapshot_2026['ADR Bed'].mean(),
+        'adr_cam_2025': df_2025_comparable['ADR Cam'].mean() if has_adr_cam_2025 else None,
+        'adr_cam_2026': df_snapshot_2026['ADR Cam'].mean() if has_adr_cam_2026 else None,
         'revenue_2025': revenue_2025,
         'revenue_2026': revenue_2026,
+        # Mantieni retrocompatibilità con 'adr' senza suffisso
+        'adr_2025': df_2025_comparable['ADR Bed'].mean(),
+        'adr_2026': df_snapshot_2026['ADR Bed'].mean(),
     }
     
     # Calcola gap
@@ -2044,12 +2068,19 @@ def main():
             )
         
         with col2:
+            # Mostra ADR Bed (sempre disponibile)
             st.metric(
-                "ADR Medio 2026",
-                f"€{comparison['adr_2026']:.2f}",
+                "ADR Bed 2026",
+                f"€{comparison['adr_bed_2026']:.2f}",
                 delta=f"€{comparison['gap_adr']:+.2f} ({comparison['gap_adr_pct']:+.1f}%)",
                 delta_color="normal"
             )
+            
+            # Mostra ADR Cam se disponibile
+            if comparison['adr_cam_2026'] is not None and comparison['adr_cam_2025'] is not None:
+                gap_adr_cam = comparison['adr_cam_2026'] - comparison['adr_cam_2025']
+                gap_adr_cam_pct = (gap_adr_cam / comparison['adr_cam_2025'] * 100) if comparison['adr_cam_2025'] > 0 else 0
+                st.caption(f"ADR Cam: €{comparison['adr_cam_2026']:.2f} ({gap_adr_cam_pct:+.1f}%)")
         
         with col3:
             st.metric(
@@ -2068,6 +2099,36 @@ def main():
                 delta=f"vs {comparable_label}",
                 delta_color="off"
             )
+        
+        # ADR Breakdown se disponibile
+        if comparison['adr_cam_2026'] is not None:
+            with st.expander("💰 ADR Breakdown: Bed vs Camera", expanded=False):
+                col_adr1, col_adr2, col_adr3 = st.columns(3)
+                
+                with col_adr1:
+                    st.markdown("**2026 OTB**")
+                    st.write(f"ADR Bed: €{comparison['adr_bed_2026']:.2f}")
+                    st.write(f"ADR Cam: €{comparison['adr_cam_2026']:.2f}")
+                    ratio_2026 = comparison['adr_cam_2026'] / comparison['adr_bed_2026']
+                    st.write(f"Ratio: {ratio_2026:.2f}x")
+                
+                with col_adr2:
+                    st.markdown("**2025 Comparabile**")
+                    st.write(f"ADR Bed: €{comparison['adr_bed_2025']:.2f}")
+                    if comparison['adr_cam_2025']:
+                        st.write(f"ADR Cam: €{comparison['adr_cam_2025']:.2f}")
+                        ratio_2025 = comparison['adr_cam_2025'] / comparison['adr_bed_2025']
+                        st.write(f"Ratio: {ratio_2025:.2f}x")
+                
+                with col_adr3:
+                    st.markdown("**Interpretazione**")
+                    st.caption(f"Pax medi per camera: ~{ratio_2026:.1f}")
+                    if comparison['adr_cam_2025']:
+                        gap_cam_pct = ((comparison['adr_cam_2026'] - comparison['adr_cam_2025']) / comparison['adr_cam_2025'] * 100)
+                        if gap_cam_pct > 0:
+                            st.success(f"ADR Cam +{gap_cam_pct:.1f}%")
+                        else:
+                            st.error(f"ADR Cam {gap_cam_pct:.1f}%")
         
         st.markdown("---")
         
