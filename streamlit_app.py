@@ -648,8 +648,9 @@ def generate_forecast_2026(df_historical, models, seasonality, scenario='base'):
     df_2026['ADR_Bed_Poly'] = pred_poly
     df_2026['ADR_Bed_RF'] = pred_rf
     
-    # Media ensemble con pesi
-    weights = {'Linear': 0.2, 'Poly': 0.3, 'RF': 0.5}
+    # Media ensemble con pesi OTTIMIZZATI
+    # Riduciamo Poly (causa picchi) e aumentiamo RF (più stabile)
+    weights = {'Linear': 0.15, 'Poly': 0.15, 'RF': 0.70}
     df_2026['ADR_Bed_Ensemble'] = (
         weights['Linear'] * pred_linear +
         weights['Poly'] * pred_poly +
@@ -1469,6 +1470,9 @@ def main():
             )
             
             st.plotly_chart(fig_models, use_container_width=True)
+            
+            # Info sui pesi del modello
+            st.caption("ℹ️ **Pesi Ensemble ottimizzati:** Random Forest 70% (stabile), Linear 15%, Polynomial 15% (ridotto per limitare picchi anomali)")
         
         # Analisi mensile dettagliata
         st.markdown("### 📅 Analisi Mensile Dettagliata 2026")
@@ -1519,6 +1523,20 @@ def main():
         display_df = monthly_forecast[['Mese', 'Giorni', 'ADR_Medio', 'Room_Nights', 'Occupazione', 'Revenue',
                                        'ADR_2025', 'Var_vs_2025_%']].copy()
         
+        # AGGIUNGI RIGA TOTALE
+        totale_row = pd.DataFrame({
+            'Mese': ['TOTALE'],
+            'Giorni': [display_df['Giorni'].sum()],
+            'ADR_Medio': [display_df['ADR_Medio'].mean()],  # Media ADR
+            'Room_Nights': [display_df['Room_Nights'].sum()],
+            'Occupazione': [display_df['Occupazione'].mean()],  # Media occupazione
+            'Revenue': [display_df['Revenue'].sum()],
+            'ADR_2025': [display_df['ADR_2025'].mean()],  # Media ADR 2025
+            'Var_vs_2025_%': [(display_df['ADR_Medio'].mean() - display_df['ADR_2025'].mean()) / display_df['ADR_2025'].mean() * 100]
+        })
+        
+        display_df = pd.concat([display_df, totale_row], ignore_index=True)
+        
         # Formatta e colora le celle basandosi sulla variazione
         def color_variation(val):
             if pd.isna(val):
@@ -1532,6 +1550,10 @@ def main():
             else:
                 return 'background-color: #f8d7da; color: #721c24'  # Rosso
         
+        # Stile per evidenziare riga TOTALE
+        def highlight_total(s):
+            return ['background-color: #17a2b8; color: white; font-weight: bold' if s['Mese'] == 'TOTALE' else '' for _ in s]
+        
         styled_df = display_df.style.format({
             'ADR_Medio': '€{:.2f}',
             'Room_Nights': '{:,.0f}',
@@ -1539,7 +1561,7 @@ def main():
             'Revenue': '€{:,.0f}',
             'ADR_2025': '€{:.2f}',
             'Var_vs_2025_%': '{:+.2f}%'
-        }).applymap(color_variation, subset=['Var_vs_2025_%'])
+        }).apply(highlight_total, axis=1).applymap(color_variation, subset=['Var_vs_2025_%'])
         
         st.dataframe(styled_df, use_container_width=True)
         
