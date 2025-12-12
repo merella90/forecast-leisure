@@ -1689,7 +1689,7 @@ def main():
     with tab2:
         st.header("Analisi Dati Storici 2023-2025")
         
-        # Grafico trend storico
+        # Grafico trend storico ADR Bed
         fig_historical = go.Figure()
         
         for anno in [2023, 2024, 2025]:
@@ -1703,9 +1703,9 @@ def main():
             ))
         
         fig_historical.update_layout(
-            title="ADR BED: Confronto Stagioni Storiche",
+            title="ADR Bed: Confronto Stagioni Storiche",
             xaxis_title="Giorno della Stagione",
-            yaxis_title="ADR BED (€)",
+            yaxis_title="ADR Bed (€)",
             hovermode='x unified',
             height=500,
             template='plotly_white'
@@ -1713,21 +1713,64 @@ def main():
         
         st.plotly_chart(fig_historical, use_container_width=True)
         
+        # Grafico trend storico ADR Cam se disponibile
+        if 'ADR Cam' in df_historical.columns and df_historical['ADR Cam'].notna().any():
+            st.markdown("### 🏨 ADR Camera - Trend Storico")
+            
+            fig_historical_cam = go.Figure()
+            
+            for anno in [2023, 2024, 2025]:
+                df_anno = df_historical[(df_historical['Anno'] == anno) & (df_historical['ADR Cam'].notna())].sort_values('Data')
+                if len(df_anno) > 0:
+                    fig_historical_cam.add_trace(go.Scatter(
+                        x=df_anno['Giorno_Stagione'],
+                        y=df_anno['ADR Cam'],
+                        mode='lines+markers',
+                        name=f'Stagione {anno}',
+                        marker=dict(size=4)
+                    ))
+            
+            fig_historical_cam.update_layout(
+                title="ADR Camera: Confronto Stagioni Storiche",
+                xaxis_title="Giorno della Stagione",
+                yaxis_title="ADR Camera (€)",
+                hovermode='x unified',
+                height=500,
+                template='plotly_white'
+            )
+            
+            st.plotly_chart(fig_historical_cam, use_container_width=True)
+        
         # Statistiche per anno
         st.markdown("### 📊 Statistiche per Anno")
         
-        stats_by_year = df_historical.groupby('Anno')['ADR Bed'].agg([
-            ('Media', 'mean'),
-            ('Mediana', 'median'),
-            ('Min', 'min'),
-            ('Max', 'max'),
-            ('Std Dev', 'std')
-        ]).round(2)
+        col_stats1, col_stats2 = st.columns(2)
         
-        st.dataframe(stats_by_year, use_container_width=True)
+        with col_stats1:
+            st.markdown("**ADR Bed**")
+            stats_by_year = df_historical.groupby('Anno')['ADR Bed'].agg([
+                ('Media', 'mean'),
+                ('Mediana', 'median'),
+                ('Min', 'min'),
+                ('Max', 'max'),
+                ('Std Dev', 'std')
+            ]).round(2)
+            st.dataframe(stats_by_year, use_container_width=True)
+        
+        with col_stats2:
+            if 'ADR Cam' in df_historical.columns and df_historical['ADR Cam'].notna().any():
+                st.markdown("**ADR Camera**")
+                stats_by_year_cam = df_historical[df_historical['ADR Cam'].notna()].groupby('Anno')['ADR Cam'].agg([
+                    ('Media', 'mean'),
+                    ('Mediana', 'median'),
+                    ('Min', 'min'),
+                    ('Max', 'max'),
+                    ('Std Dev', 'std')
+                ]).round(2)
+                st.dataframe(stats_by_year_cam, use_container_width=True)
         
         # Distribuzione ADR
-        st.markdown("### 📈 Distribuzione ADR BED")
+        st.markdown("### 📈 Distribuzione ADR Bed")
         
         fig_dist = go.Figure()
         
@@ -1760,29 +1803,59 @@ def main():
         
         df_mese = df_historical[df_historical['Mese_Nome'] == mese_selezionato]
         
-        # Grafico comparativo per mese
-        fig_mese = go.Figure()
+        # Grafici comparativi per mese in due colonne
+        col_bed, col_cam = st.columns(2)
         
-        for anno in [2023, 2024, 2025]:
-            df_anno_mese = df_mese[df_mese['Anno'] == anno].sort_values('Data')
-            if len(df_anno_mese) > 0:
-                fig_mese.add_trace(go.Scatter(
-                    x=df_anno_mese['Data'].dt.day,
-                    y=df_anno_mese['ADR Bed'],
-                    mode='lines+markers',
-                    name=f'{anno}',
-                    marker=dict(size=6)
-                ))
+        with col_bed:
+            st.markdown("**ADR Bed**")
+            fig_mese = go.Figure()
+            
+            for anno in [2023, 2024, 2025]:
+                df_anno_mese = df_mese[df_mese['Anno'] == anno].sort_values('Data')
+                if len(df_anno_mese) > 0:
+                    fig_mese.add_trace(go.Scatter(
+                        x=df_anno_mese['Data'].dt.day,
+                        y=df_anno_mese['ADR Bed'],
+                        mode='lines+markers',
+                        name=f'{anno}',
+                        marker=dict(size=6)
+                    ))
+            
+            fig_mese.update_layout(
+                title=f"ADR Bed - {mese_selezionato}",
+                xaxis_title="Giorno del Mese",
+                yaxis_title="ADR Bed (€)",
+                height=400,
+                template='plotly_white'
+            )
+            
+            st.plotly_chart(fig_mese, use_container_width=True)
         
-        fig_mese.update_layout(
-            title=f"ADR BED - {mese_selezionato}: Comparazione 2023-2025",
-            xaxis_title="Giorno del Mese",
-            yaxis_title="ADR BED (€)",
-            height=400,
-            template='plotly_white'
-        )
-        
-        st.plotly_chart(fig_mese, use_container_width=True)
+        with col_cam:
+            if 'ADR Cam' in df_historical.columns and df_mese['ADR Cam'].notna().any():
+                st.markdown("**ADR Camera**")
+                fig_mese_cam = go.Figure()
+                
+                for anno in [2023, 2024, 2025]:
+                    df_anno_mese_cam = df_mese[(df_mese['Anno'] == anno) & (df_mese['ADR Cam'].notna())].sort_values('Data')
+                    if len(df_anno_mese_cam) > 0:
+                        fig_mese_cam.add_trace(go.Scatter(
+                            x=df_anno_mese_cam['Data'].dt.day,
+                            y=df_anno_mese_cam['ADR Cam'],
+                            mode='lines+markers',
+                            name=f'{anno}',
+                            marker=dict(size=6)
+                        ))
+                
+                fig_mese_cam.update_layout(
+                    title=f"ADR Cam - {mese_selezionato}",
+                    xaxis_title="Giorno del Mese",
+                    yaxis_title="ADR Cam (€)",
+                    height=400,
+                    template='plotly_white'
+                )
+                
+                st.plotly_chart(fig_mese_cam, use_container_width=True)
         
         # Heatmap giorno settimana
         st.markdown("### 📅 Heatmap ADR BED per Giorno della Settimana")
@@ -1844,28 +1917,36 @@ def main():
         
         col1, col2, col3, col4, col5 = st.columns(5)
         
-        adr_mese_2026 = df_mese_2026['ADR_Bed_Forecast'].mean()
-        adr_mese_2025 = df_mese_storico[df_mese_storico['Anno'] == 2025]['ADR Bed'].mean() if len(df_mese_storico[df_mese_storico['Anno'] == 2025]) > 0 else 0
-        var_mese = ((adr_mese_2026 - adr_mese_2025) / adr_mese_2025 * 100) if adr_mese_2025 > 0 else 0
+        adr_bed_mese_2026 = df_mese_2026['ADR_Bed_Forecast'].mean()
+        adr_bed_mese_2025 = df_mese_storico[df_mese_storico['Anno'] == 2025]['ADR Bed'].mean() if len(df_mese_storico[df_mese_storico['Anno'] == 2025]) > 0 else 0
+        var_mese = ((adr_bed_mese_2026 - adr_bed_mese_2025) / adr_bed_mese_2025 * 100) if adr_bed_mese_2025 > 0 else 0
         
         with col1:
             st.metric(
-                "ADR Medio Mese",
-                f"€{adr_mese_2026:.2f}",
+                "ADR Bed Medio Mese",
+                f"€{adr_bed_mese_2026:.2f}",
                 delta=f"{var_mese:+.1f}% vs 2025"
             )
+            # Aggiungi ADR Cam se disponibile
+            if 'ADR_Cam_Forecast' in df_mese_2026.columns:
+                adr_cam_mese_2026 = df_mese_2026['ADR_Cam_Forecast'].mean()
+                st.caption(f"ADR Cam: €{adr_cam_mese_2026:.2f}")
         
         with col2:
             st.metric(
-                "ADR Minimo",
+                "ADR Bed Min",
                 f"€{df_mese_2026['ADR_Bed_Forecast'].min():.2f}"
             )
+            if 'ADR_Cam_Forecast' in df_mese_2026.columns:
+                st.caption(f"Cam: €{df_mese_2026['ADR_Cam_Forecast'].min():.2f}")
         
         with col3:
             st.metric(
-                "ADR Massimo",
+                "ADR Bed Max",
                 f"€{df_mese_2026['ADR_Bed_Forecast'].max():.2f}"
             )
+            if 'ADR_Cam_Forecast' in df_mese_2026.columns:
+                st.caption(f"Cam: €{df_mese_2026['ADR_Cam_Forecast'].max():.2f}")
         
         with col4:
             st.metric(
@@ -1938,35 +2019,39 @@ def main():
         
         st.markdown("---")
         
-        # Grafico giornaliero del mese
+        # Grafici giornalieri del mese - Side by side Bed e Cam
         st.markdown(f"### 📅 Andamento Giornaliero {mese_selezionato}")
         
-        fig_daily = go.Figure()
+        col_daily1, col_daily2 = st.columns(2)
         
-        # 2026 Forecast
-        df_mese_2026_sorted = df_mese_2026.sort_values('Data')
-        fig_daily.add_trace(go.Scatter(
-            x=df_mese_2026_sorted['Data'].dt.day,
-            y=df_mese_2026_sorted['ADR_Bed_Forecast'],
-            mode='lines+markers',
-            name='2026 Forecast',
-            line=dict(color='#e74c3c', width=3),
-            marker=dict(size=8),
-            text=df_mese_2026_sorted['Giorno_Nome'],
-            hovertemplate='<b>Giorno %{x}</b><br>%{text}<br>ADR: €%{y:.2f}<extra></extra>'
-        ))
-        
-        # Aggiungi dati storici se disponibili
-        for anno, colore in [(2025, '#2ecc71'), (2024, '#9b59b6'), (2023, '#3498db')]:
-            df_anno_mese = df_mese_storico[df_mese_storico['Anno'] == anno].sort_values('Data')
-            if len(df_anno_mese) > 0:
-                fig_daily.add_trace(go.Scatter(
-                    x=df_anno_mese['Data'].dt.day,
-                    y=df_anno_mese['ADR Bed'],
-                    mode='lines+markers',
-                    name=f'{anno}',
-                    line=dict(color=colore, width=2, dash='dot'),
-                    marker=dict(size=6),
+        with col_daily1:
+            st.markdown("**ADR Bed**")
+            fig_daily = go.Figure()
+            
+            # 2026 Forecast
+            df_mese_2026_sorted = df_mese_2026.sort_values('Data')
+            fig_daily.add_trace(go.Scatter(
+                x=df_mese_2026_sorted['Data'].dt.day,
+                y=df_mese_2026_sorted['ADR_Bed_Forecast'],
+                mode='lines+markers',
+                name='2026 Forecast',
+                line=dict(color='#e74c3c', width=3),
+                marker=dict(size=8),
+                text=df_mese_2026_sorted['Giorno_Nome'],
+                hovertemplate='<b>Giorno %{x}</b><br>%{text}<br>ADR: €%{y:.2f}<extra></extra>'
+            ))
+            
+            # Aggiungi dati storici se disponibili
+            for anno, colore in [(2025, '#2ecc71'), (2024, '#9b59b6'), (2023, '#3498db')]:
+                df_anno_mese = df_mese_storico[df_mese_storico['Anno'] == anno].sort_values('Data')
+                if len(df_anno_mese) > 0:
+                    fig_daily.add_trace(go.Scatter(
+                        x=df_anno_mese['Data'].dt.day,
+                        y=df_anno_mese['ADR Bed'],
+                        mode='lines+markers',
+                        name=f'{anno}',
+                        line=dict(color=colore, width=2, dash='dot'),
+                        marker=dict(size=6),
                     opacity=0.7
                 ))
         
@@ -1980,9 +2065,9 @@ def main():
             )
         
         fig_daily.update_layout(
-            title=f"ADR BED Giornaliero - {mese_selezionato}",
-            xaxis_title="Giorno del Mese",
-            yaxis_title="ADR BED (€)",
+            title=f"ADR Bed - {mese_selezionato}",
+            xaxis_title="Giorno",
+            yaxis_title="ADR Bed (€)",
             hovermode='x unified',
             height=450,
             template='plotly_white',
@@ -1990,6 +2075,58 @@ def main():
         )
         
         st.plotly_chart(fig_daily, use_container_width=True)
+        
+        with col_daily2:
+            if 'ADR_Cam_Forecast' in df_mese_2026.columns and adr_cam_bed_ratio is not None:
+                st.markdown("**ADR Camera**")
+                fig_daily_cam = go.Figure()
+                
+                # 2026 Forecast ADR Cam
+                fig_daily_cam.add_trace(go.Scatter(
+                    x=df_mese_2026_sorted['Data'].dt.day,
+                    y=df_mese_2026_sorted['ADR_Cam_Forecast'],
+                    mode='lines+markers',
+                    name='2026 Forecast',
+                    line=dict(color='#e74c3c', width=3),
+                    marker=dict(size=8),
+                    text=df_mese_2026_sorted['Giorno_Nome'],
+                    hovertemplate='<b>Giorno %{x}</b><br>%{text}<br>ADR Cam: €%{y:.2f}<extra></extra>'
+                ))
+                
+                # Aggiungi dati storici ADR Cam se disponibili
+                if 'ADR Cam' in df_historical.columns:
+                    for anno, colore in [(2025, '#2ecc71'), (2024, '#9b59b6'), (2023, '#3498db')]:
+                        df_anno_mese_cam = df_mese_storico[(df_mese_storico['Anno'] == anno) & (df_mese_storico['ADR Cam'].notna())].sort_values('Data')
+                        if len(df_anno_mese_cam) > 0:
+                            fig_daily_cam.add_trace(go.Scatter(
+                                x=df_anno_mese_cam['Data'].dt.day,
+                                y=df_anno_mese_cam['ADR Cam'],
+                                mode='lines+markers',
+                                name=f'{anno}',
+                                line=dict(color=colore, width=2, dash='dot'),
+                                marker=dict(size=6),
+                                hovertemplate='<b>Giorno %{x}</b><br>ADR Cam: €%{y:.2f}<extra></extra>'
+                            ))
+                
+                # Evidenzia weekend
+                for day in weekend_days:
+                    fig_daily_cam.add_vrect(
+                        x0=day-0.5, x1=day+0.5,
+                        fillcolor="lightblue", opacity=0.1,
+                        layer="below", line_width=0
+                    )
+                
+                fig_daily_cam.update_layout(
+                    title=f"ADR Cam - {mese_selezionato}",
+                    xaxis_title="Giorno",
+                    yaxis_title="ADR Cam (€)",
+                    hovermode='x unified',
+                    height=450,
+                    template='plotly_white',
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                
+                st.plotly_chart(fig_daily_cam, use_container_width=True)
         
         # Analisi per giorno della settimana
         st.markdown(f"### 📊 Analisi per Giorno della Settimana - {mese_selezionato}")
