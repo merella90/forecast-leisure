@@ -2125,7 +2125,7 @@ def main():
         # Calcoli revenue
         room_nights_mese = (camere_totali * len(df_mese_2026) * occupancy_assumption / 100)
         bed_nights_mese = room_nights_mese * pax_per_camera
-        revenue_mese = bed_nights_mese * adr_mese_2026
+        revenue_mese = bed_nights_mese * adr_bed_mese_2026
         
         col1, col2, col3 = st.columns(3)
         
