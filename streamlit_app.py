@@ -1787,7 +1787,7 @@ def main():
             'Revenue': '€{:,.0f}',
             'ADR_2025': '€{:.2f}',
             'Var_vs_2025_%': '{:+.2f}%'
-        }).apply(highlight_total, axis=1).applymap(color_variation, subset=['Var_vs_2025_%'])
+        }).apply(highlight_total, axis=1).map(color_variation, subset=['Var_vs_2025_%'])
         
         st.dataframe(styled_df, use_container_width=True)
         
