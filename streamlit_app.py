@@ -792,13 +792,13 @@ def generate_automatic_alerts(comparison, monthly_comparison, df_forecast):
     alerts = []
     
     # Alert 1: Gap Room Nights totale
-    gap_pct = comparison['gap_room_nights_pct']
+    gap_pct = comparison.get('gap_room_nights_pct', 0)
     if gap_pct < -15:
         alerts.append({
             'severity': 'critical',
             'icon': '🔴',
             'title': 'CRITICO: Booking Pace Molto Lento',
-            'message': f"Sei {abs(gap_pct):.1f}% indietro rispetto al 2025 ({abs(comparison['gap_room_nights']):.0f} RN)",
+            'message': f"Sei {abs(gap_pct):.1f}% indietro rispetto al 2025 ({abs(comparison.get('gap_room_nights', 0)):.0f} RN)",
             'action': 'Attiva immediatamente campagne promozionali e rivedi pricing'
         })
     elif gap_pct < -5:
@@ -806,7 +806,7 @@ def generate_automatic_alerts(comparison, monthly_comparison, df_forecast):
             'severity': 'warning',
             'icon': '🟡',
             'title': 'ATTENZIONE: Booking Pace Lento',
-            'message': f"Sei {abs(gap_pct):.1f}% indietro rispetto al 2025 ({abs(comparison['gap_room_nights']):.0f} RN)",
+            'message': f"Sei {abs(gap_pct):.1f}% indietro rispetto al 2025 ({abs(comparison.get('gap_room_nights', 0)):.0f} RN)",
             'action': 'Monitora quotidianamente e prepara azioni correttive'
         })
     elif gap_pct > 10:
@@ -814,31 +814,37 @@ def generate_automatic_alerts(comparison, monthly_comparison, df_forecast):
             'severity': 'success',
             'icon': '🟢',
             'title': 'OTTIMO: Booking Pace Forte!',
-            'message': f"Sei {gap_pct:.1f}% avanti rispetto al 2025 (+{comparison['gap_room_nights']:.0f} RN)",
+            'message': f"Sei {gap_pct:.1f}% avanti rispetto al 2025 (+{comparison.get('gap_room_nights', 0):.0f} RN)",
             'action': 'Considera aumento tariffe per massimizzare revenue'
         })
     
     # Alert 2: Mesi critici
     if monthly_comparison is not None and len(monthly_comparison) > 0:
-        weak_months = monthly_comparison[monthly_comparison['gap_pct'] < -20]
-        if len(weak_months) > 0:
-            mesi_critici = ', '.join(weak_months['Mese_Nome'].tolist())
-            alerts.append({
-                'severity': 'critical',
-                'icon': '📅',
-                'title': f'Mesi Critici: {mesi_critici}',
-                'message': f'{len(weak_months)} mesi con gap > -20%',
-                'action': f'Focus immediato su {mesi_critici} con promo dedicate'
-            })
+        # Verifica che monthly_comparison abbia le colonne necessarie
+        if 'gap_pct' in monthly_comparison.columns:
+            weak_months = monthly_comparison[monthly_comparison['gap_pct'] < -20]
+            if len(weak_months) > 0:
+                if 'Mese_Nome' in weak_months.columns:
+                    mesi_critici = ', '.join(weak_months['Mese_Nome'].tolist())
+                else:
+                    mesi_critici = ', '.join([str(m) for m in weak_months['Mese'].tolist()])
+                
+                alerts.append({
+                    'severity': 'critical',
+                    'icon': '📅',
+                    'title': f'Mesi Critici: {mesi_critici}',
+                    'message': f'{len(weak_months)} mesi con gap > -20%',
+                    'action': f'Focus immediato su {mesi_critici} con promo dedicate'
+                })
     
     # Alert 3: ADR trend
-    adr_gap_pct = comparison['gap_adr_pct']
+    adr_gap_pct = comparison.get('gap_adr_pct', 0)
     if adr_gap_pct < -5:
         alerts.append({
             'severity': 'warning',
             'icon': '💰',
             'title': 'ADR in Calo',
-            'message': f"ADR {adr_gap_pct:.1f}% vs 2025 (€{comparison['gap_adr']:.2f})",
+            'message': f"ADR {adr_gap_pct:.1f}% vs 2025 (€{comparison.get('gap_adr', 0):.2f})",
             'action': 'Rivedi strategia pricing e chiudi canali discount'
         })
     
@@ -1632,12 +1638,12 @@ def main():
                 """, unsafe_allow_html=True)
             
             with col2:
-                gap_class = 'success' if comparison_dashboard['gap_room_nights_pct'] > 0 else 'critical'
+                gap_class = 'success' if comparison_dashboard.get('gap_room_nights_pct', 0) > 0 else 'critical'
                 st.markdown(f"""
                 <div class="kpi-card {gap_class}">
                     <div class="kpi-label">ROOM NIGHTS OTB</div>
-                    <div class="kpi-value">{comparison_dashboard['room_nights_2026']:,.0f}</div>
-                    <div class="kpi-delta">{comparison_dashboard['gap_room_nights_pct']:+.1f}% vs LY</div>
+                    <div class="kpi-value">{comparison_dashboard.get('room_nights_2026', 0):,.0f}</div>
+                    <div class="kpi-delta">{comparison_dashboard.get('gap_room_nights_pct', 0):+.1f}% vs LY</div>
                 </div>
                 """, unsafe_allow_html=True)
             
@@ -1666,16 +1672,8 @@ def main():
             # Alert Automatici
             st.subheader("🚨 Alert Automatici")
             
-            # Calcola gap mensile per alert
-            df_2025_monthly = df_snapshot_2026.copy()
-            df_2025_monthly['Mese'] = df_2025_monthly['Data'].dt.month
-            monthly_2026_full = df_2025_monthly.groupby('Mese').agg({
-                'Room nights': 'sum',
-                'ADR Bed': 'mean'
-            }).reset_index()
-            
-            # Genera alert
-            alerts = generate_automatic_alerts(comparison_dashboard, monthly_2026_full, df_forecast)
+            # Genera alert (per ora senza analisi mensile dettagliata)
+            alerts = generate_automatic_alerts(comparison_dashboard, None, df_forecast)
             
             if len(alerts) > 0:
                 for alert in alerts:
