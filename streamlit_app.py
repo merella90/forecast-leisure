@@ -908,6 +908,147 @@ def analyze_day_type_performance(df_forecast, df_historical):
     
     return perf
 
+@st.cache_data
+def load_budget_2026(uploaded_file):
+    """Carica il file budget 2026 mensile"""
+    
+    try:
+        df_budget = pd.read_excel(uploaded_file)
+        
+        # Mappa mesi italiani
+        mese_map = {
+            'Gen': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'Mag': 5, 'Giu': 6,
+            'Lug': 7, 'Ago': 8, 'Set': 9, 'Ott': 10, 'Nov': 11, 'Dic': 12
+        }
+        
+        # Estrai mese da 'Mese Anno'
+        if 'Mese Anno' in df_budget.columns:
+            df_budget['Mese_Estratto'] = df_budget['Mese Anno'].apply(
+                lambda x: mese_map.get(str(x).split()[0], 0) if pd.notna(x) else 0
+            )
+        
+        # Filtra solo righe con dati budget validi
+        df_budget = df_budget[df_budget['Room Revenue BDG'].notna()].copy()
+        
+        return df_budget
+    
+    except Exception as e:
+        st.error(f"Errore caricamento budget: {str(e)}")
+        return None
+
+def calculate_daily_gap_vs_budget(df_forecast, df_budget, df_snapshot_2026):
+    """Calcola gap giornaliero vs budget e genera raccomandazioni"""
+    
+    if df_budget is None or len(df_budget) == 0:
+        return None
+    
+    # Aggiungi mese al forecast
+    df_forecast['Mese'] = df_forecast['Data'].dt.month
+    
+    # Merge con budget
+    df_forecast = df_forecast.merge(
+        df_budget[['Mese_Estratto', 'ADR Bed BDG', 'Roomnights BDG', 'Room Revenue BDG']],
+        left_on='Mese',
+        right_on='Mese_Estratto',
+        how='left'
+    )
+    
+    # Calcola gap giornaliero
+    # Distribuisci budget mensile sui giorni del mese proporzionalmente
+    giorni_per_mese = df_forecast.groupby('Mese').size().to_dict()
+    
+    df_forecast['ADR_Budget_Daily'] = df_forecast['ADR Bed BDG']
+    df_forecast['RN_Budget_Daily'] = df_forecast.apply(
+        lambda row: row['Roomnights BDG'] / giorni_per_mese.get(row['Mese'], 30) if pd.notna(row['Roomnights BDG']) else 0,
+        axis=1
+    )
+    df_forecast['Revenue_Budget_Daily'] = df_forecast.apply(
+        lambda row: row['Room Revenue BDG'] / giorni_per_mese.get(row['Mese'], 30) if pd.notna(row['Room Revenue BDG']) else 0,
+        axis=1
+    )
+    
+    # Gap ADR
+    df_forecast['Gap_ADR'] = df_forecast['ADR_Bed_Forecast'] - df_forecast['ADR_Budget_Daily']
+    df_forecast['Gap_ADR_Pct'] = (df_forecast['Gap_ADR'] / df_forecast['ADR_Budget_Daily'] * 100).round(1)
+    
+    # Gap Revenue
+    df_forecast['Gap_Revenue'] = df_forecast['Revenue_Forecast'] - df_forecast['Revenue_Budget_Daily']
+    df_forecast['Gap_Revenue_Pct'] = (df_forecast['Gap_Revenue'] / df_forecast['Revenue_Budget_Daily'] * 100).round(1)
+    
+    return df_forecast
+
+def generate_pricing_recommendations(df_forecast, df_snapshot_2026):
+    """Genera raccomandazioni pricing specifiche per giorno"""
+    
+    recommendations = []
+    
+    # Filtra solo giorni con gap negativo (sotto budget)
+    df_gap = df_forecast[
+        (df_forecast['Gap_ADR'].notna()) & 
+        (df_forecast['Gap_ADR'] < -5)  # Almeno €5 sotto budget
+    ].copy()
+    
+    for idx, row in df_gap.iterrows():
+        # Calcola ADR target per raggiungere budget
+        adr_current = row['ADR_Bed_Forecast']
+        adr_budget = row['ADR_Budget_Daily']
+        gap_adr = row['Gap_ADR']
+        
+        # Revenue recovery potenziale
+        rn_forecast = row.get('Room_Nights_Forecast', 0)
+        revenue_gain = abs(gap_adr) * rn_forecast if rn_forecast > 0 else 0
+        
+        # Priority score
+        # Fattori: weekend (x2), alta stagione (x1.5), gap% (x1-3)
+        is_weekend = row['Giorno_Settimana'] in [5, 6]  # Sab, Dom
+        is_high_season = row['Mese'] in [6, 7, 8]  # Giu, Lug, Ago
+        
+        priority_score = abs(gap_adr)
+        if is_weekend:
+            priority_score *= 2
+        if is_high_season:
+            priority_score *= 1.5
+        
+        # Determina severity
+        gap_pct = abs(row['Gap_ADR_Pct'])
+        if gap_pct > 20:
+            severity = 'critical'
+            severity_icon = '🔴'
+        elif gap_pct > 10:
+            severity = 'warning'
+            severity_icon = '🟡'
+        else:
+            severity = 'info'
+            severity_icon = '🔵'
+        
+        # Giorno nome
+        giorno_nome = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'][row['Giorno_Settimana']]
+        
+        recommendations.append({
+            'Data': row['Data'],
+            'Giorno_Nome': giorno_nome,
+            'ADR_Current': adr_current,
+            'ADR_Budget': adr_budget,
+            'ADR_Recommended': adr_budget,  # Raccomandazione = raggiungere budget
+            'Gap_EUR': gap_adr,
+            'Gap_Pct': row['Gap_ADR_Pct'],
+            'Revenue_Gain': revenue_gain,
+            'Priority_Score': priority_score,
+            'Severity': severity,
+            'Severity_Icon': severity_icon,
+            'Is_Weekend': is_weekend,
+            'Is_High_Season': is_high_season,
+            'Action': f"Alza ADR a €{adr_budget:.2f} ({abs(row['Gap_ADR_Pct']):.1f}%)"
+        })
+    
+    # Converti in DataFrame e ordina per priority
+    if len(recommendations) > 0:
+        df_recommendations = pd.DataFrame(recommendations)
+        df_recommendations = df_recommendations.sort_values('Priority_Score', ascending=False)
+        return df_recommendations
+    
+    return None
+
 def calculate_seasonality_index(df):
     """Calcola l'indice di stagionalità per settimana"""
     
@@ -1263,6 +1404,24 @@ def main():
         help="Snapshot OTB attuale per stagione 2026 - NECESSARIO per forecast accurato"
     )
     
+    # NUOVO: Upload Budget 2026
+    st.sidebar.markdown("---")
+    st.sidebar.header("🎯 Budget 2026")
+    
+    uploaded_budget_2026 = st.sidebar.file_uploader(
+        "**Budget 2026 Mensile** (Opzionale)",
+        type=['xlsx', 'xls'],
+        key='sidebar_budget_2026',
+        help="Budget mensile 2026 per generare raccomandazioni pricing"
+    )
+    
+    # Carica budget se presente
+    df_budget_2026 = None
+    if uploaded_budget_2026:
+        df_budget_2026 = load_budget_2026(uploaded_budget_2026)
+        if df_budget_2026 is not None:
+            st.sidebar.success(f"✅ Budget caricato: {len(df_budget_2026)} mesi")
+    
     # Variabile per snapshot 2025 comparabile (opzionale ma consigliata)
     # NON inizializzare a None qui, altrimenti cancella il file uploader!
     snapshot_2026_date = None
@@ -1451,14 +1610,15 @@ def main():
     st.sidebar.metric("Totale Giorni", len(df_historical))
     
     # Tab principale - Nuova struttura ispirata a RMS
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "📊 Dashboard",
         "📈 Forecast 2026", 
         "🔍 Model Analysis",
         "📉 Booking Curve & RM",
         "📅 Analisi Mensile",
         "🔬 Comparazione Anni",
-        "💾 Export & Reports"
+        "💾 Export & Reports",
+        "💰 Pricing Recommendations"
     ])
     
     # Calcola seasonality e modelli
@@ -1580,6 +1740,31 @@ def main():
             
             # NUOVO: Analizza performance per tipo di giorno
             day_type_performance = analyze_day_type_performance(df_forecast, df_historical)
+            
+            # NUOVO: Calcola gap vs budget e raccomandazioni pricing
+            df_forecast_with_budget = None
+            pricing_recommendations = None
+            
+            if df_budget_2026 is not None:
+                with st.spinner('Calcolo gap vs budget e raccomandazioni pricing...'):
+                    df_forecast_with_budget = calculate_daily_gap_vs_budget(
+                        df_forecast.copy(), 
+                        df_budget_2026, 
+                        df_snapshot_2026
+                    )
+                    
+                    if df_forecast_with_budget is not None:
+                        # Usa il forecast con budget invece di quello base
+                        df_forecast = df_forecast_with_budget
+                        
+                        # Genera raccomandazioni
+                        pricing_recommendations = generate_pricing_recommendations(
+                            df_forecast,
+                            df_snapshot_2026
+                        )
+                        
+                        if pricing_recommendations is not None:
+                            st.sidebar.success(f"✅ {len(pricing_recommendations)} raccomandazioni pricing generate")
         
         # Info forecast ibrido
         st.sidebar.success("✅ Forecast Ibrido Creato")
@@ -1686,6 +1871,34 @@ def main():
                     """, unsafe_allow_html=True)
             else:
                 st.info("✅ Nessun alert critico rilevato")
+            
+            st.markdown("---")
+            
+            # NUOVO: Quick Pricing Recommendations
+            if pricing_recommendations is not None and len(pricing_recommendations) > 0:
+                st.subheader("💰 Top 5 Pricing Actions Needed")
+                
+                top_5_pricing = pricing_recommendations.head(5)
+                
+                for idx, rec in top_5_pricing.iterrows():
+                    severity_color = {
+                        'critical': 'critical',
+                        'warning': 'warning',
+                        'info': 'info'
+                    }.get(rec['Severity'], 'info')
+                    
+                    st.markdown(f"""
+                    <div class="alert-box {severity_color}">
+                        <div class="alert-title">{rec['Severity_Icon']} {rec['Data'].strftime('%A %d %B')} - {rec['Giorno_Nome']}</div>
+                        <div class="alert-message">
+                            <strong>{rec['Action']}</strong><br>
+                            ADR Attuale: €{rec['ADR_Current']:.2f} → Target: €{rec['ADR_Recommended']:.2f}<br>
+                            Revenue recuperabile: €{rec['Revenue_Gain']:,.0f}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                st.info("💡 Vai al TAB 'Pricing Recommendations' per l'analisi completa")
             
             st.markdown("---")
             
@@ -3537,6 +3750,248 @@ def main():
                 file_name="voi_alimini_storico_2023_2025.csv",
                 mime="text/csv"
             )
+    
+    # =============================
+    # TAB 8: PRICING RECOMMENDATIONS
+    # =============================
+    with tab8:
+        st.header("💰 Raccomandazioni Pricing Intelligenti")
+        
+        if df_budget_2026 is None:
+            st.warning("""
+            ⚠️ **Budget 2026 non caricato**
+            
+            Per generare raccomandazioni pricing automatiche, carica il file budget nella sidebar.
+            
+            Il sistema analizzerà:
+            - Gap giornaliero vs budget
+            - ADR target per recuperare revenue
+            - Priority days dove intervenire
+            - Revenue potenziale recuperabile
+            """)
+        
+        elif pricing_recommendations is None or len(pricing_recommendations) == 0:
+            st.success("""
+            ✅ **Sei in linea con il budget!**
+            
+            Nessun adjustment critico necessario. Il forecast attuale è allineato con i target mensili.
+            """)
+        
+        else:
+            # Summary KPIs
+            st.subheader("📊 Overview Gap vs Budget")
+            
+            total_gap_revenue = pricing_recommendations['Revenue_Gain'].sum()
+            critical_days = len(pricing_recommendations[pricing_recommendations['Severity'] == 'critical'])
+            warning_days = len(pricing_recommendations[pricing_recommendations['Severity'] == 'warning'])
+            avg_gap_pct = pricing_recommendations['Gap_Pct'].mean()
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric(
+                    "Revenue Gap Recuperabile",
+                    f"€{total_gap_revenue:,.0f}",
+                    delta=f"{len(pricing_recommendations)} giorni"
+                )
+            
+            with col2:
+                st.metric(
+                    "Giorni CRITICI",
+                    f"{critical_days}",
+                    delta="Gap > 20%",
+                    delta_color="inverse"
+                )
+            
+            with col3:
+                st.metric(
+                    "Giorni WARNING",
+                    f"{warning_days}",
+                    delta="Gap 10-20%",
+                    delta_color="inverse"
+                )
+            
+            with col4:
+                st.metric(
+                    "Gap Medio ADR",
+                    f"{avg_gap_pct:.1f}%",
+                    delta="vs Budget"
+                )
+            
+            st.markdown("---")
+            
+            # Top Priority Days
+            st.subheader("🎯 Top 10 Giorni - Azioni Prioritarie")
+            
+            top_10 = pricing_recommendations.head(10).copy()
+            
+            # Tabella raccomandazioni
+            top_10['Data_Formatted'] = top_10['Data'].dt.strftime('%a %d/%m')
+            
+            display_df = top_10[[
+                'Severity_Icon', 'Data_Formatted', 'Giorno_Nome',
+                'ADR_Current', 'ADR_Recommended', 'Gap_EUR', 'Gap_Pct', 
+                'Revenue_Gain', 'Action'
+            ]].copy()
+            
+            display_df.columns = [
+                '⚠️', 'Data', 'Giorno',
+                'ADR Attuale', 'ADR Target', 'Gap €', 'Gap %',
+                'Revenue +', 'Azione'
+            ]
+            
+            st.dataframe(
+                display_df.style.format({
+                    'ADR Attuale': '€{:.2f}',
+                    'ADR Target': '€{:.2f}',
+                    'Gap €': '€{:.2f}',
+                    'Gap %': '{:.1f}%',
+                    'Revenue +': '€{:,.0f}'
+                }).background_gradient(subset=['Gap %'], cmap='RdYlGn_r', vmin=-30, vmax=0),
+                use_container_width=True,
+                height=400
+            )
+            
+            st.markdown("---")
+            
+            # Detailed Recommendations per Severity
+            st.subheader("📋 Raccomandazioni Dettagliate")
+            
+            tab_critical, tab_warning, tab_info = st.tabs([
+                f"🔴 CRITICI ({critical_days})",
+                f"🟡 WARNING ({warning_days})",
+                f"🔵 INFO ({len(pricing_recommendations) - critical_days - warning_days})"
+            ])
+            
+            with tab_critical:
+                critical_recs = pricing_recommendations[pricing_recommendations['Severity'] == 'critical']
+                
+                if len(critical_recs) > 0:
+                    st.write("**Giorni con gap > 20% vs budget - AZIONE IMMEDIATA RICHIESTA**")
+                    
+                    for idx, rec in critical_recs.head(5).iterrows():
+                        with st.expander(f"{rec['Severity_Icon']} {rec['Data'].strftime('%A %d %B')} - Gap {rec['Gap_Pct']:.1f}%", expanded=True):
+                            col_a, col_b = st.columns([2, 1])
+                            
+                            with col_a:
+                                st.markdown(f"""
+                                **📊 Situazione Attuale:**
+                                - ADR Forecast: €{rec['ADR_Current']:.2f}
+                                - ADR Budget: €{rec['ADR_Budget']:.2f}
+                                - Gap: €{abs(rec['Gap_EUR']):.2f} ({abs(rec['Gap_Pct']):.1f}%)
+                                
+                                **🎯 Raccomandazione:**
+                                - {rec['Action']}
+                                - Revenue recuperabile: €{rec['Revenue_Gain']:,.0f}
+                                
+                                **💡 Come Implementare:**
+                                1. Chiudi rate code promozionali
+                                2. Alza BAR sul channel manager a €{rec['ADR_Recommended']:.2f}
+                                3. Limita availability su OTA discount
+                                4. Monitora pickup giornaliero
+                                """)
+                            
+                            with col_b:
+                                # Mini gauge chart
+                                fig_gauge = go.Figure(go.Indicator(
+                                    mode="gauge+number+delta",
+                                    value=rec['ADR_Current'],
+                                    delta={'reference': rec['ADR_Budget']},
+                                    title={'text': "ADR Attuale vs Target"},
+                                    gauge={
+                                        'axis': {'range': [None, rec['ADR_Budget'] * 1.1]},
+                                        'bar': {'color': "red"},
+                                        'steps': [
+                                            {'range': [0, rec['ADR_Budget'] * 0.8], 'color': "lightgray"},
+                                            {'range': [rec['ADR_Budget'] * 0.8, rec['ADR_Budget']], 'color': "yellow"}
+                                        ],
+                                        'threshold': {
+                                            'line': {'color': "green", 'width': 4},
+                                            'thickness': 0.75,
+                                            'value': rec['ADR_Budget']
+                                        }
+                                    }
+                                ))
+                                fig_gauge.update_layout(height=250)
+                                st.plotly_chart(fig_gauge, use_container_width=True)
+                else:
+                    st.success("✅ Nessun giorno critico identificato")
+            
+            with tab_warning:
+                warning_recs = pricing_recommendations[pricing_recommendations['Severity'] == 'warning']
+                
+                if len(warning_recs) > 0:
+                    st.write("**Giorni con gap 10-20% vs budget - Monitoraggio attivo**")
+                    
+                    # Tabella compatta
+                    display_warning = warning_recs[[
+                        'Data', 'Giorno_Nome', 'ADR_Current', 'ADR_Recommended', 
+                        'Gap_Pct', 'Revenue_Gain', 'Action'
+                    ]].copy()
+                    
+                    display_warning.columns = [
+                        'Data', 'Giorno', 'ADR Attuale', 'ADR Target',
+                        'Gap %', 'Revenue +', 'Azione'
+                    ]
+                    
+                    st.dataframe(
+                        display_warning.style.format({
+                            'ADR Attuale': '€{:.2f}',
+                            'ADR Target': '€{:.2f}',
+                            'Gap %': '{:.1f}%',
+                            'Revenue +': '€{:,.0f}'
+                        }),
+                        use_container_width=True
+                    )
+                else:
+                    st.success("✅ Nessun giorno in warning")
+            
+            with tab_info:
+                info_recs = pricing_recommendations[pricing_recommendations['Severity'] == 'info']
+                
+                if len(info_recs) > 0:
+                    st.write("**Giorni con gap < 10% vs budget - Opportunità minori**")
+                    
+                    # Lista semplice
+                    for idx, rec in info_recs.head(10).iterrows():
+                        st.write(f"• {rec['Data'].strftime('%d/%m')} ({rec['Giorno_Nome']}): {rec['Action']} → +€{rec['Revenue_Gain']:,.0f}")
+                else:
+                    st.info("Nessun piccolo adjustment necessario")
+            
+            st.markdown("---")
+            
+            # Heatmap Calendar View
+            st.subheader("📅 Calendar Heatmap - Gap vs Budget")
+            
+            # Crea heatmap mensile
+            if len(pricing_recommendations) > 0:
+                df_heatmap = pricing_recommendations.copy()
+                df_heatmap['Mese'] = df_heatmap['Data'].dt.month
+                df_heatmap['Giorno_Mese'] = df_heatmap['Data'].dt.day
+                df_heatmap['Settimana'] = df_heatmap['Data'].dt.isocalendar().week
+                
+                # Pivot per heatmap
+                pivot_data = df_heatmap.pivot_table(
+                    values='Gap_Pct',
+                    index='Settimana',
+                    columns='Giorno_Settimana',
+                    aggfunc='mean'
+                )
+                
+                fig_heatmap = px.imshow(
+                    pivot_data,
+                    labels=dict(x="Giorno Settimana", y="Settimana", color="Gap %"),
+                    x=['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'],
+                    color_continuous_scale='RdYlGn',
+                    color_continuous_midpoint=0
+                )
+                
+                fig_heatmap.update_layout(
+                    title="Gap % medio per settimana e giorno",
+                    height=400
+                )
+                
+                st.plotly_chart(fig_heatmap, use_container_width=True)
     
     # Footer
     st.markdown("---")
