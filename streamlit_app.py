@@ -460,27 +460,161 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Stile CSS personalizzato
+# Stile CSS personalizzato ispirato al mockup RMS
 st.markdown("""
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+    
+    /* RMS Style Variables */
+    :root {
+        --rms-accent: #f0883e;
+        --rms-accent2: #58a6ff;
+        --rms-green: #3fb950;
+        --rms-red: #f85149;
+        --rms-yellow: #d29922;
+        --rms-surface: #161b22;
+        --rms-border: #30363d;
+    }
+    
+    /* Main Headers */
     .main-header {
+        font-family: 'IBM Plex Sans', sans-serif;
         font-size: 2.5rem;
         font-weight: 700;
         color: #1f77b4;
         text-align: center;
         margin-bottom: 1rem;
     }
+    
     .sub-header {
+        font-family: 'IBM Plex Sans', sans-serif;
         font-size: 1.2rem;
         color: #666;
         text-align: center;
         margin-bottom: 2rem;
     }
+    
+    /* KPI Cards */
+    .kpi-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem;
+        border-radius: 12px;
+        color: white;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        margin-bottom: 1rem;
+    }
+    
+    .kpi-card.success {
+        background: linear-gradient(135deg, #3fb950 0%, #2e8b40 100%);
+    }
+    
+    .kpi-card.warning {
+        background: linear-gradient(135deg, #d29922 0%, #b8860b 100%);
+    }
+    
+    .kpi-card.critical {
+        background: linear-gradient(135deg, #f85149 0%, #d32f2f 100%);
+    }
+    
+    .kpi-card.info {
+        background: linear-gradient(135deg, #58a6ff 0%, #0969da 100%);
+    }
+    
+    .kpi-value {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin: 0.5rem 0;
+    }
+    
+    .kpi-label {
+        font-family: 'IBM Plex Sans', sans-serif;
+        font-size: 0.9rem;
+        opacity: 0.9;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    .kpi-delta {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin-top: 0.5rem;
+    }
+    
+    /* Alert Boxes */
+    .alert-box {
+        padding: 1rem 1.5rem;
+        border-radius: 8px;
+        border-left: 4px solid;
+        margin-bottom: 1rem;
+        font-family: 'IBM Plex Sans', sans-serif;
+    }
+    
+    .alert-box.critical {
+        background: #fee;
+        border-color: #f85149;
+        color: #721c24;
+    }
+    
+    .alert-box.warning {
+        background: #fff3cd;
+        border-color: #d29922;
+        color: #856404;
+    }
+    
+    .alert-box.success {
+        background: #d4edda;
+        border-color: #3fb950;
+        color: #155724;
+    }
+    
+    .alert-box.info {
+        background: #d1ecf1;
+        border-color: #58a6ff;
+        color: #0c5460;
+    }
+    
+    .alert-title {
+        font-weight: 600;
+        font-size: 1.1rem;
+        margin-bottom: 0.5rem;
+    }
+    
+    .alert-message {
+        margin-bottom: 0.5rem;
+    }
+    
+    .alert-action {
+        font-weight: 500;
+        font-style: italic;
+        opacity: 0.9;
+    }
+    
+    /* Metric Cards */
     .metric-card {
         background-color: #f0f2f6;
         padding: 1rem;
         border-radius: 0.5rem;
         border-left: 4px solid #1f77b4;
+    }
+    
+    /* Tables */
+    .dataframe {
+        font-family: 'IBM Plex Mono', monospace !important;
+        font-size: 0.9rem;
+    }
+    
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        font-family: 'IBM Plex Sans', sans-serif;
+        font-weight: 500;
+        padding: 12px 24px;
+        border-radius: 8px 8px 0 0;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -619,6 +753,154 @@ def calculate_segment_weight(df_historical, df_altri_segmenti):
     peso_medio = sum([breakdown[y]['peso_diretti'] for y in [2023, 2024, 2025]]) / 3
     
     return peso_medio, breakdown
+
+def calculate_model_metrics(models, df_historical):
+    """Calcola metriche di accuracy per i modelli"""
+    
+    required_cols = ['Giorno_Stagione', 'Settimana_Anno', 'Giorno_Settimana', 'Mese', 'ADR Bed']
+    df_train = df_historical[required_cols].dropna()
+    
+    X = df_train[['Giorno_Stagione', 'Settimana_Anno', 'Giorno_Settimana', 'Mese']].values
+    y_true = df_train['ADR Bed'].values
+    
+    metrics = {}
+    
+    # Random Forest
+    if 'RandomForest' in models:
+        rf_model = models['RandomForest']
+        y_pred = rf_model.predict(X)
+        
+        mae = np.mean(np.abs(y_true - y_pred))
+        mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+        r2 = rf_model.score(X, y_true)
+        
+        metrics['RandomForest'] = {
+            'MAE': mae,
+            'MAPE': mape,
+            'R2': r2,
+            'feature_importance': dict(zip(
+                ['Giorno_Stagione', 'Settimana_Anno', 'Giorno_Settimana', 'Mese'],
+                rf_model.feature_importances_
+            ))
+        }
+    
+    return metrics
+
+def generate_automatic_alerts(comparison, monthly_comparison, df_forecast):
+    """Genera alert automatici basati su analisi dati"""
+    
+    alerts = []
+    
+    # Alert 1: Gap Room Nights totale
+    gap_pct = comparison['gap_room_nights_pct']
+    if gap_pct < -15:
+        alerts.append({
+            'severity': 'critical',
+            'icon': '🔴',
+            'title': 'CRITICO: Booking Pace Molto Lento',
+            'message': f"Sei {abs(gap_pct):.1f}% indietro rispetto al 2025 ({abs(comparison['gap_room_nights']):.0f} RN)",
+            'action': 'Attiva immediatamente campagne promozionali e rivedi pricing'
+        })
+    elif gap_pct < -5:
+        alerts.append({
+            'severity': 'warning',
+            'icon': '🟡',
+            'title': 'ATTENZIONE: Booking Pace Lento',
+            'message': f"Sei {abs(gap_pct):.1f}% indietro rispetto al 2025 ({abs(comparison['gap_room_nights']):.0f} RN)",
+            'action': 'Monitora quotidianamente e prepara azioni correttive'
+        })
+    elif gap_pct > 10:
+        alerts.append({
+            'severity': 'success',
+            'icon': '🟢',
+            'title': 'OTTIMO: Booking Pace Forte!',
+            'message': f"Sei {gap_pct:.1f}% avanti rispetto al 2025 (+{comparison['gap_room_nights']:.0f} RN)",
+            'action': 'Considera aumento tariffe per massimizzare revenue'
+        })
+    
+    # Alert 2: Mesi critici
+    if monthly_comparison is not None and len(monthly_comparison) > 0:
+        weak_months = monthly_comparison[monthly_comparison['gap_pct'] < -20]
+        if len(weak_months) > 0:
+            mesi_critici = ', '.join(weak_months['Mese_Nome'].tolist())
+            alerts.append({
+                'severity': 'critical',
+                'icon': '📅',
+                'title': f'Mesi Critici: {mesi_critici}',
+                'message': f'{len(weak_months)} mesi con gap > -20%',
+                'action': f'Focus immediato su {mesi_critici} con promo dedicate'
+            })
+    
+    # Alert 3: ADR trend
+    adr_gap_pct = comparison['gap_adr_pct']
+    if adr_gap_pct < -5:
+        alerts.append({
+            'severity': 'warning',
+            'icon': '💰',
+            'title': 'ADR in Calo',
+            'message': f"ADR {adr_gap_pct:.1f}% vs 2025 (€{comparison['gap_adr']:.2f})",
+            'action': 'Rivedi strategia pricing e chiudi canali discount'
+        })
+    
+    # Alert 4: Day-type analysis
+    if df_forecast is not None and len(df_forecast) > 0:
+        df_forecast['Giorno_Nome_IT'] = df_forecast['Giorno_Settimana'].map({
+            0: 'Lunedì', 1: 'Martedì', 2: 'Mercoledì', 3: 'Giovedì',
+            4: 'Venerdì', 5: 'Sabato', 6: 'Domenica'
+        })
+        
+        dow_avg = df_forecast.groupby('Giorno_Nome_IT')['ADR_Bed_Forecast'].mean()
+        
+        # Trova giorni deboli
+        weak_days = dow_avg[dow_avg < dow_avg.mean() * 0.85]
+        if len(weak_days) > 0:
+            giorni_deboli = ', '.join(weak_days.index.tolist())
+            alerts.append({
+                'severity': 'info',
+                'icon': '📊',
+                'title': 'Pattern Giorni Deboli',
+                'message': f'{giorni_deboli} costantemente sotto media',
+                'action': 'Considera promo specifiche per questi giorni'
+            })
+    
+    return alerts
+
+def analyze_day_type_performance(df_forecast, df_historical):
+    """Analizza performance per tipo di giorno"""
+    
+    df_forecast['Giorno_Nome_IT'] = df_forecast['Giorno_Settimana'].map({
+        0: 'Lunedì', 1: 'Martedì', 2: 'Mercoledì', 3: 'Giovedì',
+        4: 'Venerdì', 5: 'Sabato', 6: 'Domenica'
+    })
+    
+    # Performance forecast 2026
+    forecast_perf = df_forecast.groupby('Giorno_Nome_IT').agg({
+        'ADR_Bed_Forecast': 'mean',
+        'Occupazione_Forecast': 'mean'
+    }).reset_index()
+    
+    forecast_perf.columns = ['Giorno', 'ADR_2026', 'OCC_2026']
+    
+    # Performance storica 2025
+    df_historical['Giorno_Nome_IT'] = df_historical['Giorno_Settimana'].map({
+        0: 'Lunedì', 1: 'Martedì', 2: 'Mercoledì', 3: 'Giovedì',
+        4: 'Venerdì', 5: 'Sabato', 6: 'Domenica'
+    })
+    
+    df_2025 = df_historical[df_historical['Anno'] == 2025]
+    hist_perf = df_2025.groupby('Giorno_Nome_IT')['ADR Bed'].mean().reset_index()
+    hist_perf.columns = ['Giorno', 'ADR_2025']
+    
+    # Merge
+    perf = forecast_perf.merge(hist_perf, on='Giorno', how='left')
+    perf['Var_%'] = ((perf['ADR_2026'] - perf['ADR_2025']) / perf['ADR_2025'] * 100).round(1)
+    
+    # Ordina giorni settimana
+    giorni_ordine = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica']
+    perf['Giorno'] = pd.Categorical(perf['Giorno'], categories=giorni_ordine, ordered=True)
+    perf = perf.sort_values('Giorno')
+    
+    return perf
 
 def calculate_seasonality_index(df):
     """Calcola l'indice di stagionalità per settimana"""
@@ -1162,14 +1444,15 @@ def main():
     st.sidebar.metric("Stagioni Analizzate", "3 (2023-2025)")
     st.sidebar.metric("Totale Giorni", len(df_historical))
     
-    # Tab principale
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    # Tab principale - Nuova struttura ispirata a RMS
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "📊 Dashboard",
         "📈 Forecast 2026", 
-        "📊 Analisi Storica", 
-        "🔍 Comparazione Anni",
-        "📅 Analisi Mensile",
+        "🔍 Model Analysis",
         "📉 Booking Curve & RM",
-        "💾 Metriche & Export"
+        "📅 Analisi Mensile",
+        "🔬 Comparazione Anni",
+        "💾 Export & Reports"
     ])
     
     # Calcola seasonality e modelli
@@ -1285,6 +1568,12 @@ def main():
             df_forecast['RevPAR_Forecast'] = df_forecast['ADR_Bed_Forecast'] * df_forecast['Occupazione_Forecast']
             
             metrics = calculate_forecast_metrics(df_forecast, df_historical)
+            
+            # NUOVO: Calcola metriche modelli
+            model_metrics = calculate_model_metrics(models, df_historical)
+            
+            # NUOVO: Analizza performance per tipo di giorno
+            day_type_performance = analyze_day_type_performance(df_forecast, df_historical)
         
         # Info forecast ibrido
         st.sidebar.success("✅ Forecast Ibrido Creato")
@@ -1314,9 +1603,143 @@ def main():
         st.stop()
     
     # =============================
-    # TAB 1: FORECAST 2026
+    # TAB 1: DASHBOARD
     # =============================
     with tab1:
+        st.header("🎯 Dashboard Revenue Management")
+        
+        # Calcola confronto per dashboard
+        if df_snapshots_2025 is not None and df_snapshot_2026 is not None:
+            force_comparison_date = exact_comparable_date if has_exact_comparable else None
+            comparison_dashboard, _ = compare_booking_curves(
+                df_snapshots_2025, 
+                df_snapshot_2026,
+                force_date=force_comparison_date,
+                debug=False
+            )
+            
+            # KPI Cards Row 1
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                var_color = 'success' if metrics.get('Variazione_vs_2025', 0) > 0 else 'warning'
+                st.markdown(f"""
+                <div class="kpi-card info">
+                    <div class="kpi-label">ADR BED FORECAST 2026</div>
+                    <div class="kpi-value">€{metrics.get('ADR_Medio_Forecast', 0):.2f}</div>
+                    <div class="kpi-delta">{metrics.get('Variazione_vs_2025', 0):+.1f}% vs 2025</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                gap_class = 'success' if comparison_dashboard['gap_room_nights_pct'] > 0 else 'critical'
+                st.markdown(f"""
+                <div class="kpi-card {gap_class}">
+                    <div class="kpi-label">ROOM NIGHTS OTB</div>
+                    <div class="kpi-value">{comparison_dashboard['room_nights_2026']:,.0f}</div>
+                    <div class="kpi-delta">{comparison_dashboard['gap_room_nights_pct']:+.1f}% vs LY</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col3:
+                revenue_total = df_forecast['Revenue_Forecast'].sum()
+                st.markdown(f"""
+                <div class="kpi-card success">
+                    <div class="kpi-label">REVENUE FORECAST</div>
+                    <div class="kpi-value">€{revenue_total/1000:.0f}K</div>
+                    <div class="kpi-delta">{comparison_dashboard.get('gap_revenue_pct', 0):+.1f}% vs LY</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col4:
+                occ_media = (df_forecast['Occupazione_Forecast'].mean() * 100) if 'Occupazione_Forecast' in df_forecast.columns else 0
+                st.markdown(f"""
+                <div class="kpi-card warning">
+                    <div class="kpi-label">OCCUPAZIONE MEDIA</div>
+                    <div class="kpi-value">{occ_media:.1f}%</div>
+                    <div class="kpi-delta">Target: {occupancy_base*100:.0f}%</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            st.markdown("---")
+            
+            # Alert Automatici
+            st.subheader("🚨 Alert Automatici")
+            
+            # Calcola gap mensile per alert
+            df_2025_monthly = df_snapshot_2026.copy()
+            df_2025_monthly['Mese'] = df_2025_monthly['Data'].dt.month
+            monthly_2026_full = df_2025_monthly.groupby('Mese').agg({
+                'Room nights': 'sum',
+                'ADR Bed': 'mean'
+            }).reset_index()
+            
+            # Genera alert
+            alerts = generate_automatic_alerts(comparison_dashboard, monthly_2026_full, df_forecast)
+            
+            if len(alerts) > 0:
+                for alert in alerts:
+                    st.markdown(f"""
+                    <div class="alert-box {alert['severity']}">
+                        <div class="alert-title">{alert['icon']} {alert['title']}</div>
+                        <div class="alert-message">{alert['message']}</div>
+                        <div class="alert-action">💡 {alert['action']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("✅ Nessun alert critico rilevato")
+            
+            st.markdown("---")
+            
+            # Day-Type Performance
+            st.subheader("📊 Performance per Tipo di Giorno")
+            
+            if day_type_performance is not None and len(day_type_performance) > 0:
+                perf = day_type_performance
+                
+                fig_daytype = go.Figure()
+                
+                # ADR 2025 vs 2026
+                fig_daytype.add_trace(go.Bar(
+                    x=perf['Giorno'],
+                    y=perf['ADR_2025'],
+                    name='2025 Effettivo',
+                    marker_color='lightgray'
+                ))
+                
+                fig_daytype.add_trace(go.Bar(
+                    x=perf['Giorno'],
+                    y=perf['ADR_2026'],
+                    name='2026 Forecast',
+                    marker_color='#58a6ff'
+                ))
+                
+                fig_daytype.update_layout(
+                    title="ADR per Giorno Settimana: 2025 vs 2026",
+                    barmode='group',
+                    height=400,
+                    template='plotly_white'
+                )
+                
+                st.plotly_chart(fig_daytype, use_container_width=True)
+                
+                # Tabella performance
+                st.dataframe(
+                    perf.style.format({
+                        'ADR_2025': '€{:.2f}',
+                        'ADR_2026': '€{:.2f}',
+                        'OCC_2026': '{:.1%}',
+                        'Var_%': '{:+.1f}%'
+                    }).background_gradient(subset=['Var_%'], cmap='RdYlGn', vmin=-10, vmax=10),
+                    use_container_width=True
+                )
+        else:
+            st.warning("⚠️ Carica gli snapshot 2025 e 2026 per visualizzare il dashboard completo")
+    
+    # =============================
+    # TAB 2: FORECAST 2026
+    # =============================
+    with tab2:
         st.header("Previsione ADR per Stagione 2026")
         
         # Badge Forecast Ibrido
@@ -1945,9 +2368,205 @@ def main():
             )
     
     # =============================
-    # TAB 2: ANALISI STORICA
+    # TAB 3: MODEL ANALYSIS
     # =============================
-    with tab2:
+    with tab3:
+        st.header("🔍 Analisi Modelli Predittivi")
+        
+        # Model Accuracy Metrics
+        st.subheader("📈 Metriche di Accuratezza")
+        
+        if model_metrics and 'RandomForest' in model_metrics:
+            rf_metrics = model_metrics['RandomForest']
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                mape_val = rf_metrics['MAPE']
+                mape_status = "🟢 Ottimo" if mape_val < 10 else ("🟡 Buono" if mape_val < 15 else "🔴 Da migliorare")
+                st.metric(
+                    "MAPE",
+                    f"{mape_val:.1f}%",
+                    delta=mape_status,
+                    help="Mean Absolute Percentage Error - Ottimo se < 10%, Buono se < 15%"
+                )
+            
+            with col2:
+                st.metric(
+                    "MAE",
+                    f"€{rf_metrics['MAE']:.2f}",
+                    help="Mean Absolute Error - Errore medio in Euro"
+                )
+            
+            with col3:
+                r2_val = rf_metrics['R2']
+                r2_status = "🟢 Eccellente" if r2_val > 0.8 else ("🟡 Buono" if r2_val > 0.6 else "🔴 Debole")
+                st.metric(
+                    "R² Score",
+                    f"{r2_val:.3f}",
+                    delta=r2_status,
+                    help="Varianza spiegata - 1.0 = perfetto, >0.8 = eccellente"
+                )
+            
+            st.markdown("---")
+            
+            # Feature Importance
+            st.subheader("🌲 Random Forest - Feature Importance")
+            
+            importance_data = rf_metrics['feature_importance']
+            
+            importance_df = pd.DataFrame({
+                'Feature': list(importance_data.keys()),
+                'Importance': list(importance_data.values())
+            }).sort_values('Importance', ascending=False)
+            
+            # Traduci feature names
+            feature_translations = {
+                'Giorno_Stagione': 'Giorno nella Stagione',
+                'Settimana_Anno': 'Settimana dell\'Anno',
+                'Giorno_Settimana': 'Giorno Settimana (Lun-Dom)',
+                'Mese': 'Mese'
+            }
+            
+            importance_df['Feature_IT'] = importance_df['Feature'].map(feature_translations)
+            
+            fig_importance = px.bar(
+                importance_df,
+                x='Importance',
+                y='Feature_IT',
+                orientation='h',
+                title="Quali variabili influenzano di più l'ADR?",
+                color='Importance',
+                color_continuous_scale='Blues',
+                labels={'Feature_IT': 'Variabile', 'Importance': 'Importanza'}
+            )
+            
+            fig_importance.update_layout(
+                height=350,
+                showlegend=False,
+                template='plotly_white'
+            )
+            
+            st.plotly_chart(fig_importance, use_container_width=True)
+            
+            # Interpretazione intelligente
+            top_feature = importance_df.iloc[0]
+            top_feature_name = top_feature['Feature_IT']
+            top_feature_pct = top_feature['Importance'] * 100
+            
+            if top_feature['Feature'] == 'Giorno_Stagione':
+                interpretation = f"Il modello si basa principalmente sulla **progressione temporale** della stagione. Questo è normale per un hotel leisure con forte stagionalità."
+            elif top_feature['Feature'] == 'Settimana_Anno':
+                interpretation = f"Il modello identifica **pattern settimanali ricorrenti** come fattore chiave. Settimane specifiche dell'anno hanno comportamenti ADR distintivi."
+            elif top_feature['Feature'] == 'Giorno_Settimana':
+                interpretation = f"Il **tipo di giorno** (weekend vs weekday) è il fattore dominante. Questo è tipico per strutture leisure con forte differenziale weekend."
+            else:
+                interpretation = f"Il **mese** è il fattore principale, indicando macro-stagionalità mensile marcata."
+            
+            st.info(f"""
+            **💡 Interpretazione:**
+            
+            La variabile più importante è **{top_feature_name}** con un peso del **{top_feature_pct:.1f}%**.
+            
+            {interpretation}
+            """)
+            
+            st.markdown("---")
+            
+            # Residual Analysis
+            st.subheader("📉 Analisi Residui (Errori del Modello)")
+            
+            with st.expander("Mostra analisi dettagliata errori", expanded=False):
+                # Calcola residui per day of week
+                df_hist_copy = df_historical.copy()
+                df_hist_copy['Giorno_Nome'] = df_hist_copy['Giorno_Settimana'].map({
+                    0: 'Lun', 1: 'Mar', 2: 'Mer', 3: 'Gio', 4: 'Ven', 5: 'Sab', 6: 'Dom'
+                })
+                
+                st.write("**Errore medio per giorno della settimana:**")
+                st.write("_(Analisi su dati storici per identificare bias del modello)_")
+                
+                # Questa analisi richiederebbe di salvare le predizioni durante il training
+                # Per ora mostriamo una nota
+                st.info("""
+                📊 **Analisi Residui Disponibile nei Log di Training**
+                
+                Per un'analisi completa dei residui:
+                - Esporta predizioni vs reali dal training
+                - Analizza bias per giorno settimana
+                - Identifica periodi con errori sistematici
+                """)
+        
+        else:
+            st.warning("⚠️ Metriche modello non disponibili. Verifica che il forecast sia stato generato correttamente.")
+        
+        st.markdown("---")
+        
+        # Confronto modelli dettagliato
+        st.subheader("📊 Confronto Visivo Tutti i Modelli")
+        
+        with st.expander("Mostra confronto grafico modelli (Linear, Poly, RF, SARIMA)", expanded=False):
+            if show_models and models:
+                st.write("**Previsioni di tutti i modelli a confronto:**")
+                
+                # Questo codice esiste già nel vecchio TAB 1, lo manteniamo qui
+                fig_models = go.Figure()
+                
+                # Dati storici 2025
+                df_2025 = df_historical[df_historical['Anno'] == 2025].copy()
+                df_2025 = df_2025.sort_values('Data')
+                
+                fig_models.add_trace(go.Scatter(
+                    x=df_2025['Data'],
+                    y=df_2025['ADR Bed'],
+                    mode='lines',
+                    name='2025 Reale',
+                    line=dict(color='gray', width=2, dash='dot')
+                ))
+                
+                # Aggiungi ogni modello
+                colors = {
+                    'Linear': '#3498db',
+                    'Polynomial': '#e74c3c', 
+                    'RandomForest': '#2ecc71',
+                    'SARIMA': '#9b59b6'
+                }
+                
+                for model_name in ['Linear', 'Polynomial', 'RandomForest', 'SARIMA']:
+                    if model_name in df_forecast.columns:
+                        fig_models.add_trace(go.Scatter(
+                            x=df_forecast['Data'],
+                            y=df_forecast[model_name],
+                            mode='lines',
+                            name=model_name,
+                            line=dict(color=colors.get(model_name, '#95a5a6'), width=2)
+                        ))
+                
+                fig_models.update_layout(
+                    title="Confronto Predizioni: Linear vs Polynomial vs Random Forest vs SARIMA",
+                    xaxis_title="Data",
+                    yaxis_title="ADR Bed (€)",
+                    hovermode='x unified',
+                    height=500,
+                    template='plotly_white'
+                )
+                
+                st.plotly_chart(fig_models, use_container_width=True)
+                
+                st.info("""
+                **📌 Come leggere il grafico:**
+                - **Linear**: Trend lineare semplice
+                - **Polynomial**: Cattura curve e non-linearità
+                - **Random Forest**: Più flessibile, gestisce interazioni complesse
+                - **SARIMA**: Specializzato in serie temporali con stagionalità
+                
+                Il modello **ensemble finale** usa principalmente Random Forest (80%) + SARIMA (20%) per bilanciare accuratezza e stabilità.
+                """)
+    
+    # =============================
+    # TAB 4: BOOKING CURVE & RM (vecchio TAB 5)
+    # =============================
+    with tab4:
         st.header("Analisi Dati Storici 2023-2025")
         
         # Grafico trend storico ADR Bed
