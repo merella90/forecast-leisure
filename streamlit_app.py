@@ -936,90 +936,227 @@ def load_budget_2026(uploaded_file):
         st.error(f"Errore caricamento budget: {str(e)}")
         return None
 
-def calculate_daily_gap_vs_budget(df_forecast, df_budget, df_snapshot_2026):
-    """Calcola gap giornaliero vs budget e genera raccomandazioni"""
+def calculate_daily_gap_vs_budget(df_forecast, df_budget, df_snapshot_2026, df_historical):
+    """
+    Calcola gap giornaliero vs budget usando distribuzione INTELLIGENTE
+    basata su pattern storici e trend, non distribuzione uniforme
+    """
     
     if df_budget is None or len(df_budget) == 0:
         return None
     
     # Aggiungi mese al forecast
     df_forecast['Mese'] = df_forecast['Data'].dt.month
+    df_forecast['Giorno_Mese'] = df_forecast['Data'].dt.day
     
-    # Merge con budget
-    df_forecast = df_forecast.merge(
-        df_budget[['Mese_Estratto', 'ADR Bed BDG', 'Roomnights BDG', 'Room Revenue BDG']],
-        left_on='Mese',
-        right_on='Mese_Estratto',
-        how='left'
-    )
+    # Per ogni mese con budget, calcola distribuzione intelligente basata su storico
+    for idx, budget_row in df_budget.iterrows():
+        mese = budget_row['Mese_Estratto']
+        
+        if pd.isna(mese) or mese == 0:
+            continue
+        
+        # Budget mensile totale
+        adr_budget_mese = budget_row['ADR Bed BDG']
+        rn_budget_mese = budget_row['Roomnights BDG']
+        revenue_budget_mese = budget_row['Room Revenue BDG']
+        
+        if pd.isna(adr_budget_mese) or pd.isna(rn_budget_mese):
+            continue
+        
+        # ALGORITMO INTELLIGENTE: Analizza distribuzione storica dello stesso mese
+        # Prendi dati storici dello stesso mese (2023, 2024, 2025)
+        df_mese_storico = df_historical[df_historical['Mese'] == mese].copy()
+        
+        if len(df_mese_storico) > 0:
+            # Calcola "peso" di ogni giorno del mese basato su storico
+            # Peso = ADR storico medio di quel giorno settimana in quel mese
+            
+            # Group by giorno settimana per trovare pattern
+            dow_pattern = df_mese_storico.groupby('Giorno_Settimana').agg({
+                'ADR Bed': 'mean',
+                'Room nights': 'mean'
+            }).reset_index()
+            
+            dow_pattern.columns = ['Giorno_Settimana', 'ADR_Storico_Medio', 'RN_Storico_Medio']
+            
+            # Normalizza i pesi (somma = 1)
+            total_adr_weight = dow_pattern['ADR_Storico_Medio'].sum()
+            dow_pattern['ADR_Weight'] = dow_pattern['ADR_Storico_Medio'] / total_adr_weight if total_adr_weight > 0 else 1/7
+            
+            # Merge pattern con forecast del mese
+            df_mese_forecast = df_forecast[df_forecast['Mese'] == mese].copy()
+            df_mese_forecast = df_mese_forecast.merge(
+                dow_pattern[['Giorno_Settimana', 'ADR_Storico_Medio', 'ADR_Weight']],
+                on='Giorno_Settimana',
+                how='left'
+            )
+            
+            # DISTRIBUZIONE INTELLIGENTE del budget mensile
+            # Invece di Budget_Mese / Giorni, usa peso storico
+            giorni_nel_mese = len(df_mese_forecast)
+            
+            # ADR Budget per giorno = ADR medio mensile × (peso relativo del giorno)
+            # Questo significa: weekend avrà ADR budget più alto, weekday più basso
+            adr_medio_mese = adr_budget_mese
+            
+            df_mese_forecast['ADR_Budget_Daily'] = df_mese_forecast.apply(
+                lambda row: adr_medio_mese * (1 + (row['ADR_Weight'] - 1/7) * 2) 
+                if pd.notna(row.get('ADR_Weight')) else adr_medio_mese,
+                axis=1
+            )
+            
+            # RN Budget per giorno = distribuito proporzionalmente ai giorni
+            # Ma considerando che alcuni giorni (weekend) attraggono più RN
+            df_mese_forecast['RN_Budget_Daily'] = rn_budget_mese / giorni_nel_mese
+            
+            # Revenue Budget = ADR Budget × RN Budget
+            df_mese_forecast['Revenue_Budget_Daily'] = (
+                df_mese_forecast['ADR_Budget_Daily'] * df_mese_forecast['RN_Budget_Daily']
+            )
+            
+            # Update nel dataframe principale
+            for col in ['ADR_Budget_Daily', 'RN_Budget_Daily', 'Revenue_Budget_Daily']:
+                df_forecast.loc[df_mese_forecast.index, col] = df_mese_forecast[col]
+        
+        else:
+            # Fallback: distribuzione uniforme se non ci sono dati storici
+            giorni_nel_mese = len(df_forecast[df_forecast['Mese'] == mese])
+            
+            df_forecast.loc[df_forecast['Mese'] == mese, 'ADR_Budget_Daily'] = adr_budget_mese
+            df_forecast.loc[df_forecast['Mese'] == mese, 'RN_Budget_Daily'] = rn_budget_mese / giorni_nel_mese if giorni_nel_mese > 0 else 0
+            df_forecast.loc[df_forecast['Mese'] == mese, 'Revenue_Budget_Daily'] = revenue_budget_mese / giorni_nel_mese if giorni_nel_mese > 0 else 0
     
-    # Calcola gap giornaliero
-    # Distribuisci budget mensile sui giorni del mese proporzionalmente
-    giorni_per_mese = df_forecast.groupby('Mese').size().to_dict()
-    
-    df_forecast['ADR_Budget_Daily'] = df_forecast['ADR Bed BDG']
-    df_forecast['RN_Budget_Daily'] = df_forecast.apply(
-        lambda row: row['Roomnights BDG'] / giorni_per_mese.get(row['Mese'], 30) if pd.notna(row['Roomnights BDG']) else 0,
-        axis=1
-    )
-    df_forecast['Revenue_Budget_Daily'] = df_forecast.apply(
-        lambda row: row['Room Revenue BDG'] / giorni_per_mese.get(row['Mese'], 30) if pd.notna(row['Room Revenue BDG']) else 0,
-        axis=1
-    )
-    
-    # Gap ADR
+    # Calcola GAP (forecast vs budget intelligente)
     df_forecast['Gap_ADR'] = df_forecast['ADR_Bed_Forecast'] - df_forecast['ADR_Budget_Daily']
     df_forecast['Gap_ADR_Pct'] = (df_forecast['Gap_ADR'] / df_forecast['ADR_Budget_Daily'] * 100).round(1)
     
-    # Gap Revenue
     df_forecast['Gap_Revenue'] = df_forecast['Revenue_Forecast'] - df_forecast['Revenue_Budget_Daily']
     df_forecast['Gap_Revenue_Pct'] = (df_forecast['Gap_Revenue'] / df_forecast['Revenue_Budget_Daily'] * 100).round(1)
     
     return df_forecast
 
-def generate_pricing_recommendations(df_forecast, df_snapshot_2026):
-    """Genera raccomandazioni pricing specifiche per giorno"""
+def generate_pricing_recommendations(df_forecast, df_snapshot_2026, df_historical):
+    """
+    Genera raccomandazioni pricing INTELLIGENTI basate su:
+    1. Gap vs budget (già calcolato con distribuzione smart)
+    2. Trend storico dello stesso giorno/periodo
+    3. Performance relativa vs anni precedenti
+    4. Elasticità implicita (se alzo ADR, cosa succede a RN?)
+    """
     
     recommendations = []
     
-    # Filtra solo giorni con gap negativo (sotto budget)
+    # Filtra solo giorni con gap significativo
     df_gap = df_forecast[
         (df_forecast['Gap_ADR'].notna()) & 
-        (df_forecast['Gap_ADR'] < -5)  # Almeno €5 sotto budget
+        (df_forecast['Gap_ADR'] < -3)  # Almeno €3 sotto budget
     ].copy()
     
     for idx, row in df_gap.iterrows():
-        # Calcola ADR target per raggiungere budget
+        # Dati correnti
         adr_current = row['ADR_Bed_Forecast']
         adr_budget = row['ADR_Budget_Daily']
         gap_adr = row['Gap_ADR']
         
+        # Analisi TREND STORICO per questo specifico periodo
+        # Trova stesso periodo (±3 giorni) negli anni precedenti
+        giorno_stagione = row['Giorno_Stagione']
+        
+        df_same_period = df_historical[
+            (df_historical['Giorno_Stagione'] >= giorno_stagione - 3) &
+            (df_historical['Giorno_Stagione'] <= giorno_stagione + 3)
+        ].copy()
+        
+        if len(df_same_period) > 0:
+            # ADR storico medio dello stesso periodo
+            adr_storico_avg = df_same_period['ADR Bed'].mean()
+            
+            # Trend: confronta forecast con storico
+            trend_vs_storico = ((adr_current - adr_storico_avg) / adr_storico_avg * 100) if adr_storico_avg > 0 else 0
+            
+            # RACCOMANDAZIONE INTELLIGENTE
+            # Se budget > storico → target aggressivo
+            # Se budget ≈ storico → target realistico
+            # Se budget < storico → segnala problema
+            
+            if adr_budget > adr_storico_avg * 1.1:
+                # Budget ambizioso (+10% vs storico)
+                recommendation_type = 'aggressive'
+                # Target = 80% del gap (più conservativo)
+                adr_recommended = adr_current + (abs(gap_adr) * 0.8)
+            elif adr_budget > adr_storico_avg * 0.9:
+                # Budget realistico (±10% vs storico)
+                recommendation_type = 'realistic'
+                # Target = 100% del gap
+                adr_recommended = adr_budget
+            else:
+                # Budget conservativo
+                recommendation_type = 'conservative'
+                # Target = budget (facile da raggiungere)
+                adr_recommended = adr_budget
+        else:
+            # Nessun dato storico, usa solo budget
+            recommendation_type = 'budget_based'
+            adr_recommended = adr_budget
+            adr_storico_avg = adr_current
+            trend_vs_storico = 0
+        
         # Revenue recovery potenziale
         rn_forecast = row.get('Room_Nights_Forecast', 0)
-        revenue_gain = abs(gap_adr) * rn_forecast if rn_forecast > 0 else 0
+        revenue_gain = (adr_recommended - adr_current) * rn_forecast if rn_forecast > 0 else 0
         
-        # Priority score
-        # Fattori: weekend (x2), alta stagione (x1.5), gap% (x1-3)
-        is_weekend = row['Giorno_Settimana'] in [5, 6]  # Sab, Dom
-        is_high_season = row['Mese'] in [6, 7, 8]  # Giu, Lug, Ago
+        # Priority score SMART
+        # Fattori: gap absoluto, weekend, alta stagione, trend storico
+        is_weekend = row['Giorno_Settimana'] in [5, 6]
+        is_high_season = row['Mese'] in [6, 7, 8]
         
         priority_score = abs(gap_adr)
         if is_weekend:
             priority_score *= 2
         if is_high_season:
             priority_score *= 1.5
+        if trend_vs_storico < -10:  # Sotto trend storico
+            priority_score *= 1.3
         
-        # Determina severity
+        # Severity INTELLIGENTE
         gap_pct = abs(row['Gap_ADR_Pct'])
-        if gap_pct > 20:
-            severity = 'critical'
-            severity_icon = '🔴'
-        elif gap_pct > 10:
-            severity = 'warning'
-            severity_icon = '🟡'
+        
+        # Se budget molto > storico, severity più bassa (budget ambizioso)
+        if adr_budget > adr_storico_avg * 1.15:
+            # Budget ambizioso, allenta severity
+            if gap_pct > 30:
+                severity = 'critical'
+                severity_icon = '🔴'
+            elif gap_pct > 15:
+                severity = 'warning'
+                severity_icon = '🟡'
+            else:
+                severity = 'info'
+                severity_icon = '🔵'
         else:
-            severity = 'info'
-            severity_icon = '🔵'
+            # Budget normale, severity standard
+            if gap_pct > 20:
+                severity = 'critical'
+                severity_icon = '🔴'
+            elif gap_pct > 10:
+                severity = 'warning'
+                severity_icon = '🟡'
+            else:
+                severity = 'info'
+                severity_icon = '🔵'
+        
+        # Costruisci messaggio raccomandazione
+        adr_increase_pct = ((adr_recommended - adr_current) / adr_current * 100) if adr_current > 0 else 0
+        
+        if recommendation_type == 'aggressive':
+            action_msg = f"Alza ADR a €{adr_recommended:.2f} (+{adr_increase_pct:.1f}%) - Target parziale (budget ambizioso)"
+        elif recommendation_type == 'realistic':
+            action_msg = f"Alza ADR a €{adr_recommended:.2f} (+{adr_increase_pct:.1f}%) - Allineamento budget"
+        elif recommendation_type == 'conservative':
+            action_msg = f"Alza ADR a €{adr_recommended:.2f} (+{adr_increase_pct:.1f}%) - Facile da raggiungere"
+        else:
+            action_msg = f"Alza ADR a €{adr_recommended:.2f} (+{adr_increase_pct:.1f}%)"
         
         # Giorno nome
         giorno_nome = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'][row['Giorno_Settimana']]
@@ -1029,16 +1166,19 @@ def generate_pricing_recommendations(df_forecast, df_snapshot_2026):
             'Giorno_Nome': giorno_nome,
             'ADR_Current': adr_current,
             'ADR_Budget': adr_budget,
-            'ADR_Recommended': adr_budget,  # Raccomandazione = raggiungere budget
+            'ADR_Storico': adr_storico_avg,
+            'ADR_Recommended': adr_recommended,
             'Gap_EUR': gap_adr,
             'Gap_Pct': row['Gap_ADR_Pct'],
+            'Trend_vs_Storico': trend_vs_storico,
             'Revenue_Gain': revenue_gain,
             'Priority_Score': priority_score,
             'Severity': severity,
             'Severity_Icon': severity_icon,
+            'Recommendation_Type': recommendation_type,
             'Is_Weekend': is_weekend,
             'Is_High_Season': is_high_season,
-            'Action': f"Alza ADR a €{adr_budget:.2f} ({abs(row['Gap_ADR_Pct']):.1f}%)"
+            'Action': action_msg
         })
     
     # Converti in DataFrame e ordina per priority
@@ -1746,21 +1886,23 @@ def main():
             pricing_recommendations = None
             
             if df_budget_2026 is not None:
-                with st.spinner('Calcolo gap vs budget e raccomandazioni pricing...'):
+                with st.spinner('Calcolo gap vs budget e raccomandazioni pricing intelligenti...'):
                     df_forecast_with_budget = calculate_daily_gap_vs_budget(
                         df_forecast.copy(), 
                         df_budget_2026, 
-                        df_snapshot_2026
+                        df_snapshot_2026,
+                        df_historical  # NUOVO: passa storico per analisi trend
                     )
                     
                     if df_forecast_with_budget is not None:
                         # Usa il forecast con budget invece di quello base
                         df_forecast = df_forecast_with_budget
                         
-                        # Genera raccomandazioni
+                        # Genera raccomandazioni INTELLIGENTI
                         pricing_recommendations = generate_pricing_recommendations(
                             df_forecast,
-                            df_snapshot_2026
+                            df_snapshot_2026,
+                            df_historical  # NUOVO: passa storico per trend analysis
                         )
                         
                         if pricing_recommendations is not None:
@@ -3830,19 +3972,21 @@ def main():
             
             display_df = top_10[[
                 'Severity_Icon', 'Data_Formatted', 'Giorno_Nome',
-                'ADR_Current', 'ADR_Recommended', 'Gap_EUR', 'Gap_Pct', 
-                'Revenue_Gain', 'Action'
+                'ADR_Current', 'ADR_Storico', 'ADR_Budget', 'ADR_Recommended', 
+                'Gap_EUR', 'Gap_Pct', 'Revenue_Gain', 'Action'
             ]].copy()
             
             display_df.columns = [
                 '⚠️', 'Data', 'Giorno',
-                'ADR Attuale', 'ADR Target', 'Gap €', 'Gap %',
-                'Revenue +', 'Azione'
+                'ADR Attuale', 'ADR Storico', 'ADR Budget', 'ADR Target',
+                'Gap €', 'Gap %', 'Revenue +', 'Azione'
             ]
             
             st.dataframe(
                 display_df.style.format({
                     'ADR Attuale': '€{:.2f}',
+                    'ADR Storico': '€{:.2f}',
+                    'ADR Budget': '€{:.2f}',
                     'ADR Target': '€{:.2f}',
                     'Gap €': '€{:.2f}',
                     'Gap %': '{:.1f}%',
@@ -3874,46 +4018,85 @@ def main():
                             col_a, col_b = st.columns([2, 1])
                             
                             with col_a:
+                                # Mostra tipo raccomandazione
+                                rec_type_label = {
+                                    'aggressive': '🎯 Target Parziale (Budget Ambizioso)',
+                                    'realistic': '✅ Target Realistico',
+                                    'conservative': '💚 Target Facile',
+                                    'budget_based': '📊 Budget-Based'
+                                }.get(rec['Recommendation_Type'], '')
+                                
                                 st.markdown(f"""
                                 **📊 Situazione Attuale:**
                                 - ADR Forecast: €{rec['ADR_Current']:.2f}
                                 - ADR Budget: €{rec['ADR_Budget']:.2f}
-                                - Gap: €{abs(rec['Gap_EUR']):.2f} ({abs(rec['Gap_Pct']):.1f}%)
+                                - ADR Storico (stesso periodo): €{rec['ADR_Storico']:.2f}
+                                - Gap vs Budget: €{abs(rec['Gap_EUR']):.2f} ({abs(rec['Gap_Pct']):.1f}%)
+                                - Trend vs Storico: {rec['Trend_vs_Storico']:+.1f}%
                                 
-                                **🎯 Raccomandazione:**
+                                **🎯 Raccomandazione ({rec_type_label}):**
                                 - {rec['Action']}
                                 - Revenue recuperabile: €{rec['Revenue_Gain']:,.0f}
                                 
-                                **💡 Come Implementare:**
-                                1. Chiudi rate code promozionali
-                                2. Alza BAR sul channel manager a €{rec['ADR_Recommended']:.2f}
-                                3. Limita availability su OTA discount
-                                4. Monitora pickup giornaliero
+                                **💡 Analisi Intelligente:**
                                 """)
+                                
+                                # Analisi intelligente basata su tipo raccomandazione
+                                if rec['Recommendation_Type'] == 'aggressive':
+                                    st.info("""
+                                    ⚠️ Il budget per questo giorno è **molto ambizioso** (+10% vs media storica).
+                                    Raccomando target parziale (80% del gap) per evitare resistenza del mercato.
+                                    Monitora attentamente il pickup dopo l'aumento.
+                                    """)
+                                elif rec['Recommendation_Type'] == 'realistic':
+                                    st.success("""
+                                    ✅ Il budget è **in linea con lo storico**. Target pieno raggiungibile.
+                                    Storico dimostra che il mercato accetta questi livelli ADR.
+                                    """)
+                                elif rec['Recommendation_Type'] == 'conservative':
+                                    st.success("""
+                                    💚 Il budget è **conservativo** rispetto allo storico. Target facile!
+                                    Potresti anche considerare di puntare più in alto.
+                                    """)
+                                
+                                st.markdown("""
+                                **🔧 Come Implementare:**
+                                1. Chiudi rate code promozionali
+                                2. Alza BAR sul channel manager a €{:.2f}
+                                3. Limita availability su OTA discount
+                                4. Monitora pickup nelle prossime 24-48h
+                                5. Se pickup rallenta > 30%, considera rollback parziale
+                                """.format(rec['ADR_Recommended']))
                             
                             with col_b:
                                 # Mini gauge chart
                                 fig_gauge = go.Figure(go.Indicator(
                                     mode="gauge+number+delta",
                                     value=rec['ADR_Current'],
-                                    delta={'reference': rec['ADR_Budget']},
+                                    delta={'reference': rec['ADR_Recommended']},
                                     title={'text': "ADR Attuale vs Target"},
                                     gauge={
-                                        'axis': {'range': [None, rec['ADR_Budget'] * 1.1]},
+                                        'axis': {'range': [None, max(rec['ADR_Budget'], rec['ADR_Storico']) * 1.1]},
                                         'bar': {'color': "red"},
                                         'steps': [
-                                            {'range': [0, rec['ADR_Budget'] * 0.8], 'color': "lightgray"},
-                                            {'range': [rec['ADR_Budget'] * 0.8, rec['ADR_Budget']], 'color': "yellow"}
+                                            {'range': [0, rec['ADR_Storico'] * 0.9], 'color': "lightgray"},
+                                            {'range': [rec['ADR_Storico'] * 0.9, rec['ADR_Storico'] * 1.1], 'color': "yellow"},
+                                            {'range': [rec['ADR_Storico'] * 1.1, max(rec['ADR_Budget'], rec['ADR_Storico']) * 1.1], 'color': "lightgreen"}
                                         ],
                                         'threshold': {
                                             'line': {'color': "green", 'width': 4},
                                             'thickness': 0.75,
-                                            'value': rec['ADR_Budget']
+                                            'value': rec['ADR_Recommended']
                                         }
                                     }
                                 ))
                                 fig_gauge.update_layout(height=250)
                                 st.plotly_chart(fig_gauge, use_container_width=True)
+                                
+                                # Mini chart storico vs budget
+                                st.caption(f"📊 Storico: €{rec['ADR_Storico']:.2f}")
+                                st.caption(f"🎯 Budget: €{rec['ADR_Budget']:.2f}")
+                                st.caption(f"💡 Target: €{rec['ADR_Recommended']:.2f}")
                 else:
                     st.success("✅ Nessun giorno critico identificato")
             
