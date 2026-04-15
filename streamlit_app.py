@@ -908,6 +908,70 @@ def analyze_day_type_performance(df_forecast, df_historical):
     
     return perf
 
+def analyze_weekly_split(df_snapshot_2026, df_snapshots_2025, df_forecast):
+    """
+    Analizza split settimanale (Dom-Dom) per soggiorni 7 notti
+    Confronta: Snapshot 2026 vs Snapshot 2025 stesso periodo vs Chiusura 2025
+    """
+    
+    if df_snapshot_2026 is None:
+        return None
+    
+    # Crea settimane Domenica-Domenica
+    df_2026 = df_snapshot_2026.copy()
+    df_2026['Settimana_Dom'] = df_2026['Data'].apply(
+        lambda x: (x - pd.Timedelta(days=x.dayofweek + 1 if x.dayofweek != 6 else 0)).isocalendar()[1]
+    )
+    df_2026['Anno_Settimana'] = df_2026['Data'].dt.year.astype(str) + '-W' + df_2026['Settimana_Dom'].astype(str)
+    
+    # Aggrega per settimana
+    weekly_2026 = df_2026.groupby('Anno_Settimana').agg({
+        'Room nights': 'sum',
+        'ADR Bed': 'mean',
+        'Data': ['min', 'max']
+    }).reset_index()
+    
+    weekly_2026.columns = ['Settimana', 'RN_OTB_2026', 'ADR_OTB_2026', 'Data_Inizio', 'Data_Fine']
+    
+    # Se abbiamo snapshot 2025, confronta
+    if df_snapshots_2025 is not None and len(df_snapshots_2025) > 0:
+        # Trova snapshot 2025 comparabile (stesso periodo anno scorso)
+        snapshot_date_2026 = df_2026['Data'].min()
+        comparable_date_2025 = snapshot_date_2026.replace(year=2024)
+        
+        # Filtra snapshot 2025 più vicina
+        df_snapshots_2025['Date_Diff'] = abs((df_snapshots_2025['Snapshot_Date'] - comparable_date_2025).dt.days)
+        closest_snapshot = df_snapshots_2025[df_snapshots_2025['Date_Diff'] == df_snapshots_2025['Date_Diff'].min()]
+        
+        if len(closest_snapshot) > 0:
+            df_2025_comp = closest_snapshot.copy()
+            df_2025_comp['Settimana_Dom'] = df_2025_comp['Data'].apply(
+                lambda x: (x - pd.Timedelta(days=x.dayofweek + 1 if x.dayofweek != 6 else 0)).isocalendar()[1]
+            )
+            df_2025_comp['Anno_Settimana'] = '2025-W' + df_2025_comp['Settimana_Dom'].astype(str)
+            
+            weekly_2025_comp = df_2025_comp.groupby('Anno_Settimana').agg({
+                'Room nights': 'sum',
+                'ADR Bed': 'mean'
+            }).reset_index()
+            
+            weekly_2025_comp.columns = ['Settimana', 'RN_OTB_2025', 'ADR_OTB_2025']
+            
+            # Merge
+            weekly_2026 = weekly_2026.merge(
+                weekly_2025_comp[['Settimana', 'RN_OTB_2025', 'ADR_OTB_2025']],
+                left_on='Settimana',
+                right_on='Settimana',
+                how='left',
+                suffixes=('', '_2025')
+            )
+            
+            # Calcola gap
+            weekly_2026['Gap_RN'] = weekly_2026['RN_OTB_2026'] - weekly_2026['RN_OTB_2025']
+            weekly_2026['Gap_RN_Pct'] = (weekly_2026['Gap_RN'] / weekly_2026['RN_OTB_2025'] * 100).round(1)
+    
+    return weekly_2026
+
 @st.cache_data
 def load_budget_2026(uploaded_file):
     """Carica il file budget 2026 mensile"""
@@ -1881,6 +1945,9 @@ def main():
             # NUOVO: Analizza performance per tipo di giorno
             day_type_performance = analyze_day_type_performance(df_forecast, df_historical)
             
+            # NUOVO: Analizza split settimanale Dom-Dom
+            weekly_split_analysis = analyze_weekly_split(df_snapshot_2026, df_snapshots_2025, df_forecast)
+            
             # NUOVO: Calcola gap vs budget e raccomandazioni pricing
             df_forecast_with_budget = None
             pricing_recommendations = None
@@ -2086,6 +2153,110 @@ def main():
                     }).background_gradient(subset=['Var_%'], cmap='RdYlGn', vmin=-10, vmax=10),
                     use_container_width=True
                 )
+            
+            # NUOVO: Weekly Split Analysis (Dom-Dom per soggiorni 7 notti)
+            if weekly_split_analysis is not None and len(weekly_split_analysis) > 0:
+                st.markdown("---")
+                st.subheader("📅 Analisi Settimanale (Dom-Dom) - Soggiorni 7 Notti")
+                
+                st.info("""
+                **Analisi per settimane Domenica-Domenica** (soggiorno medio 7 notti Bravo)
+                
+                Confronto:
+                - OTB 2026 (snapshot attuale)
+                - OTB 2025 stesso periodo (split)
+                """)
+                
+                # Tabella weekly
+                display_weekly = weekly_split_analysis.copy()
+                
+                if 'Data_Inizio' in display_weekly.columns and 'Data_Fine' in display_weekly.columns:
+                    display_weekly['Periodo'] = display_weekly.apply(
+                        lambda row: f"{row['Data_Inizio'].strftime('%d/%m')} - {row['Data_Fine'].strftime('%d/%m')}",
+                        axis=1
+                    )
+                
+                cols_to_show = ['Periodo' if 'Periodo' in display_weekly.columns else 'Settimana']
+                
+                if 'RN_OTB_2026' in display_weekly.columns:
+                    cols_to_show.append('RN_OTB_2026')
+                if 'RN_OTB_2025' in display_weekly.columns:
+                    cols_to_show.append('RN_OTB_2025')
+                if 'Gap_RN' in display_weekly.columns:
+                    cols_to_show.append('Gap_RN')
+                if 'Gap_RN_Pct' in display_weekly.columns:
+                    cols_to_show.append('Gap_RN_Pct')
+                if 'ADR_OTB_2026' in display_weekly.columns:
+                    cols_to_show.append('ADR_OTB_2026')
+                if 'ADR_OTB_2025' in display_weekly.columns:
+                    cols_to_show.append('ADR_OTB_2025')
+                
+                display_df_weekly = display_weekly[cols_to_show].copy()
+                
+                # Rinomina colonne
+                rename_dict = {
+                    'Periodo': 'Settimana (Dom-Dom)',
+                    'Settimana': 'Settimana',
+                    'RN_OTB_2026': 'RN OTB 2026',
+                    'RN_OTB_2025': 'RN OTB 2025 (split)',
+                    'Gap_RN': 'Gap RN',
+                    'Gap_RN_Pct': 'Gap %',
+                    'ADR_OTB_2026': 'ADR 2026',
+                    'ADR_OTB_2025': 'ADR 2025'
+                }
+                
+                display_df_weekly = display_df_weekly.rename(columns=rename_dict)
+                
+                # Format
+                format_dict = {}
+                if 'RN OTB 2026' in display_df_weekly.columns:
+                    format_dict['RN OTB 2026'] = '{:,.0f}'
+                if 'RN OTB 2025 (split)' in display_df_weekly.columns:
+                    format_dict['RN OTB 2025 (split)'] = '{:,.0f}'
+                if 'Gap RN' in display_df_weekly.columns:
+                    format_dict['Gap RN'] = '{:+,.0f}'
+                if 'Gap %' in display_df_weekly.columns:
+                    format_dict['Gap %'] = '{:+.1f}%'
+                if 'ADR 2026' in display_df_weekly.columns:
+                    format_dict['ADR 2026'] = '€{:.2f}'
+                if 'ADR 2025' in display_df_weekly.columns:
+                    format_dict['ADR 2025'] = '€{:.2f}'
+                
+                styled_df = display_df_weekly.style.format(format_dict)
+                
+                if 'Gap %' in display_df_weekly.columns:
+                    styled_df = styled_df.background_gradient(
+                        subset=['Gap %'],
+                        cmap='RdYlGn',
+                        vmin=-30,
+                        vmax=30
+                    )
+                
+                st.dataframe(styled_df, use_container_width=True)
+                
+                # Insight automatico
+                if 'Gap_RN_Pct' in weekly_split_analysis.columns:
+                    avg_gap = weekly_split_analysis['Gap_RN_Pct'].mean()
+                    
+                    if avg_gap < -10:
+                        st.error(f"""
+                        🔴 **ATTENZIONE:** Gap medio settimanale: {avg_gap:.1f}%
+                        
+                        Le settimane Domenica-Domenica sono mediamente indietro rispetto allo stesso periodo 2025.
+                        Considera promozioni mirate per soggiorni settimanali.
+                        """)
+                    elif avg_gap < 0:
+                        st.warning(f"""
+                        🟡 **MONITORAGGIO:** Gap medio settimanale: {avg_gap:.1f}%
+                        
+                        Lieve ritardo vs 2025. Continua a monitorare il pickup settimanale.
+                        """)
+                    else:
+                        st.success(f"""
+                        ✅ **OTTIMO:** Gap medio settimanale: +{avg_gap:.1f}%
+                        
+                        Le settimane Dom-Dom sono avanti rispetto allo split 2025!
+                        """)
         else:
             st.warning("⚠️ Carica gli snapshot 2025 e 2026 per visualizzare il dashboard completo")
     
@@ -4149,32 +4320,50 @@ def main():
             # Crea heatmap mensile
             if len(pricing_recommendations) > 0:
                 df_heatmap = pricing_recommendations.copy()
-                df_heatmap['Mese'] = df_heatmap['Data'].dt.month
-                df_heatmap['Giorno_Mese'] = df_heatmap['Data'].dt.day
-                df_heatmap['Settimana'] = df_heatmap['Data'].dt.isocalendar().week
                 
-                # Pivot per heatmap
-                pivot_data = df_heatmap.pivot_table(
-                    values='Gap_Pct',
-                    index='Settimana',
-                    columns='Giorno_Settimana',
-                    aggfunc='mean'
-                )
-                
-                fig_heatmap = px.imshow(
-                    pivot_data,
-                    labels=dict(x="Giorno Settimana", y="Settimana", color="Gap %"),
-                    x=['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'],
-                    color_continuous_scale='RdYlGn',
-                    color_continuous_midpoint=0
-                )
-                
-                fig_heatmap.update_layout(
-                    title="Gap % medio per settimana e giorno",
-                    height=400
-                )
-                
-                st.plotly_chart(fig_heatmap, use_container_width=True)
+                # Assicurati che ci siano le colonne necessarie
+                if 'Data' in df_heatmap.columns:
+                    df_heatmap['Mese'] = df_heatmap['Data'].dt.month
+                    df_heatmap['Giorno_Mese'] = df_heatmap['Data'].dt.day
+                    df_heatmap['Settimana'] = df_heatmap['Data'].dt.isocalendar().week
+                    df_heatmap['Giorno_Settimana_Num'] = df_heatmap['Data'].dt.dayofweek
+                    
+                    # Verifica che ci siano dati sufficienti
+                    if len(df_heatmap) > 0 and 'Gap_Pct' in df_heatmap.columns:
+                        # Pivot per heatmap
+                        try:
+                            # Assicurati che Giorno_Settimana_Num esista
+                            if 'Giorno_Settimana_Num' not in df_heatmap.columns:
+                                df_heatmap['Giorno_Settimana_Num'] = df_heatmap['Data'].dt.dayofweek
+                            
+                            pivot_data = df_heatmap.pivot_table(
+                                values='Gap_Pct',
+                                index='Settimana',
+                                columns='Giorno_Settimana_Num',
+                                aggfunc='mean'
+                            )
+                            
+                            fig_heatmap = px.imshow(
+                                pivot_data,
+                                labels=dict(x="Giorno Settimana", y="Settimana", color="Gap %"),
+                                x=['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'],
+                                color_continuous_scale='RdYlGn',
+                                color_continuous_midpoint=0
+                            )
+                            
+                            fig_heatmap.update_layout(
+                                title="Gap % medio per settimana e giorno",
+                                height=400
+                            )
+                            
+                            st.plotly_chart(fig_heatmap, use_container_width=True)
+                        
+                        except Exception as e:
+                            st.warning(f"Impossibile generare heatmap: {str(e)}")
+                    else:
+                        st.info("Dati insufficienti per generare heatmap")
+                else:
+                    st.warning("Colonna 'Data' non trovata nelle raccomandazioni")
     
     # Footer
     st.markdown("---")
